@@ -21,6 +21,7 @@ interface Activity {
 
 /**
  * Emit an activity to Linear for the agent session
+ * For response activities, creates actual comments in Linear
  */
 export async function emitActivity(activity: Activity): Promise<void> {
   try {
@@ -29,21 +30,31 @@ export async function emitActivity(activity: Activity): Promise<void> {
       throw new Error('LINEAR_API_KEY not configured');
     }
     
-    // Initialize Linear client (will be used for actual activity emission)
-    new LinearClient({
+    const linearClient = new LinearClient({
       apiKey
     });
+    
     console.log(`📤 Emitting ${activity.type} activity:`, {
       sessionId: activity.sessionId,
       issueId: activity.issueId,
       contentLength: activity.content.length
     });
     
-    // TODO: Implement actual activity creation when Linear SDK supports it
-    // For now, we'll log the activity
-    console.log(`📝 Activity content: ${activity.content}`);
-    
-    console.log(`✅ Activity emitted successfully: ${activity.type}`);
+    // For response activities, create actual comments in Linear
+    if (activity.type === 'response') {
+      console.log(`💬 Creating Linear comment for issue ${activity.issueId}`);
+      
+      await linearClient.createComment({
+        issueId: activity.issueId,
+        body: activity.content
+      });
+      
+      console.log(`✅ Comment created successfully in Linear`);
+    } else {
+      // For other activity types, just log for now
+      console.log(`📝 Activity content: ${activity.content}`);
+      console.log(`✅ Activity logged: ${activity.type}`);
+    }
     
   } catch (error) {
     console.error('❌ Failed to emit activity:', error);
