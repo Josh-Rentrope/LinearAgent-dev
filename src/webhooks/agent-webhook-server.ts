@@ -227,7 +227,7 @@ class LinearAgentWebhookServer {
           try {
             const opencodeSession = await openCodeClient.createSession(
               sessionContext,
-              commentBody
+              commentBody // Pass the actual user message verbatim
             );
             
             this.sessionManager.linkOpenCodeSession(
@@ -237,14 +237,13 @@ class LinearAgentWebhookServer {
             
             this.sessionManager.updateSessionStatus(session.id, 'active');
             
-            return `🚀 **Session Started!** I've created a dedicated session to help you with this issue. I'll maintain context across our conversation and provide more detailed assistance.
-
-**Session Details:**
-- Issue: ${sessionContext.issueTitle}
-- Session ID: ${session.id}
-- Status: Active
-
-I'm ready to help! What would you like to work on? 🛠️`;
+            // Now send the actual user message and get response
+            const response = await openCodeClient.sendSessionMessage(
+              opencodeSession.id,
+              commentBody // Send user's message verbatim
+            );
+            
+            return response; // Return the actual OpenCode response
 
           } catch (sessionError) {
             console.error('❌ Failed to create OpenCode session:', sessionError);
@@ -273,7 +272,7 @@ I'm ready to help! What would you like to work on? 🛠️`;
           // Generate response using session (opencode serve handles message storage)
           const response = await openCodeClient.generateSessionResponse(
             session,
-            commentBody
+            commentBody // Pass user message verbatim
           );
 
           return response;

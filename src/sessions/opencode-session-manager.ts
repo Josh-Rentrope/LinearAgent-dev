@@ -1,5 +1,3 @@
-import { LinearWebhookPayload } from '../webhooks/agent-webhook-server'
-
 /**
  * Session context for Linear webhook events
  * @author Joshua Rentrope <joshua@opencode.ai>
@@ -58,7 +56,7 @@ export class OpenCodeSessionManager {
    */
   async createSession(
     linearContext: SessionContext,
-    options: SessionCreateOptions = {}
+    _options: SessionCreateOptions = {}
   ): Promise<OpenCodeSession> {
     const sessionId = this.generateSessionId(linearContext.issueId, linearContext.userId)
     
@@ -230,38 +228,7 @@ export class OpenCodeSessionManager {
 
 
 
-  /**
-   * Extract Linear context from webhook payload
-   */
-  static extractLinearContext(payload: LinearWebhookPayload): SessionContext | null {
-    try {
-      if (payload.type !== 'Comment' || !payload.data) {
-        return null
-      }
 
-      const comment = payload.data
-      const issue = comment.issue
-
-      if (!issue) {
-        return null
-      }
-
-      return {
-        issueId: issue.id,
-        issueTitle: issue.title,
-        issueDescription: issue.description || '',
-        userId: comment.user.id,
-        userName: comment.user.name,
-        teamId: issue.team.id,
-        commentId: comment.id,
-        mentionText: comment.body,
-        createdAt: payload.createdAt
-      }
-    } catch (error) {
-      console.error('❌ Error extracting Linear context:', error)
-      return null
-    }
-  }
 }
 
 export default OpenCodeSessionManager

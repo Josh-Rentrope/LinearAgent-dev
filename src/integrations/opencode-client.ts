@@ -9,7 +9,8 @@
  * @issue JOS-145
  */
 
-import { OpenCodeSession, SessionContext, SessionMessage } from '../sessions/opencode-session-manager';
+import { OpenCodeSession, SessionContext } from '../sessions/opencode-session-manager';
+import { getOpenCodeServeUrl } from '../utils/port-detector';
 
 interface OpenCodeError {
   errors: Array<{
@@ -61,13 +62,12 @@ interface OpenCodeCreateMessageRequest {
 export class OpenCodeClient {
   private apiKey: string;
   private baseUrl: string;
-  private opencodeServeUrl: string;
+  private opencodeServeUrl: string | null = null;
   private opencodeServeEnabled: boolean;
 
   constructor() {
     this.apiKey = process.env.OPENCODE_API_KEY || '';
     this.baseUrl = process.env.OPENCODE_API_BASE_URL || 'https://api.opencode.dev';
-    this.opencodeServeUrl = process.env.OPENCODE_SERVE_URL || 'http://127.0.0.1:53998';
     this.opencodeServeEnabled = process.env.OPENCODE_SERVE_ENABLED === 'true';
     
     if (!this.apiKey) {
@@ -75,52 +75,30 @@ export class OpenCodeClient {
     }
     
     if (this.opencodeServeEnabled) {
-      console.log(`🔗 OpenCode Serve integration enabled at ${this.opencodeServeUrl}`);
+      // Initialize with placeholder, will be updated when first used
+      this.opencodeServeUrl = process.env.OPENCODE_SERVE_URL || null;
+      console.log(`🔗 OpenCode Serve integration enabled, will detect port dynamically`);
     } else {
       console.log('📝 OpenCode Serve integration disabled, using fallback responses');
     }
   }
 
-interface OpenCodeError {
-  error: {
-    message: string;
-    type: string;
-  };
-}
-
-interface OpenCodeSessionResponse {
-  sessionId: string;
-  status: 'created' | 'active' | 'completed' | 'error';
-  url?: string;
-  expiresAt?: string;
-}
-
-interface OpenCodeStreamResponse {
-  type: 'message' | 'error' | 'complete';
-  content?: string;
-  messageId?: string;
-  error?: string;
-}
-
-export class OpenCodeClient {
-  private apiKey: string;
-  private baseUrl: string;
-  private sessionApiKey: string;
-  private sessionBaseUrl: string;
-
-  constructor() {
-    this.apiKey = process.env.OPENCODE_API_KEY || '';
-    this.baseUrl = process.env.OPENCODE_API_BASE_URL || 'https://api.opencode.dev';
-    this.sessionApiKey = process.env.OPENCODE_SESSION_TOKEN || this.apiKey;
-    this.sessionBaseUrl = process.env.OPENCODE_SESSION_API_URL || this.baseUrl;
-    
-    if (!this.apiKey) {
-      console.warn('⚠️  OPENCODE_API_KEY not configured, using fallback responses');
+  /**
+   * Get the current opencode serve URL, detecting port if needed
+   */
+  private async getOpenCodeServeUrl(): Promise<string> {
+    if (!this.opencodeServeEnabled) {
+      throw new Error('OpenCode Serve integration is not enabled');
     }
     
-    if (!this.sessionApiKey) {
-      console.warn('⚠️  OPENCODE_SESSION_TOKEN not configured, session features disabled');
+    // If we have a working URL, return it
+    if (this.opencodeServeUrl && this.opencodeServeUrl !== 'http://127.0.0.1:53998') {
+      return this.opencodeServeUrl;
     }
+    
+    // Detect the correct URL
+    this.opencodeServeUrl = await getOpenCodeServeUrl();
+    return this.opencodeServeUrl;
   }
 
   /**
@@ -182,57 +160,6 @@ export class OpenCodeClient {
     }
   }
 
-    try {
-      console.log('🤖 Generating OpenCode response...');
-      
-      const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'Linear-Agent/1.0'
-        },
-        body: JSON.stringify({
-          model: 'opencode-chat',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are the OpenCode Agent, a helpful AI assistant for developers. You are knowledgeable about software development, workflows, and best practices. Be concise, helpful, and professional.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          max_tokens: 300,
-          temperature: 0.7,
-          top_p: 0.9,
-          frequency_penalty: 0.5,
-          presence_penalty: 0.5
-        })
-      });
-
-      if (!response.ok) {
-        const errorData: OpenCodeError = await response.json().catch(() => ({}));
-        throw new Error(`OpenCode API ${response.status}: ${errorData.error?.message || response.statusText}`);
-      }
-
-      const data: OpenCodeResponse = await response.json();
-      const content = data.choices[0]?.message?.content;
-      
-      if (!content) {
-        throw new Error('No content received from OpenCode API');
-      }
-
-      console.log('✅ OpenCode response generated successfully');
-      return content.trim();
-
-    } catch (error) {
-      console.error('❌ OpenCode API error:', error);
-      return this.getFallbackResponse(prompt);
-    }
-  }
-
   /**
    * Generate a contextual response for Linear mentions
    */
@@ -241,7 +168,7 @@ export class OpenCodeClient {
     issueTitle: string,
     issueIdentifier: string
   ): Promise<string> {
-    const prompt = `You are the OpenCode Agent, mentioned in a Linear issue. Provide a helpful, concise response.
+    const prompt = `You are OpenCode Agent, mentioned in a Linear issue. Provide a helpful, concise response.
 
 Context:
 - Issue: ${issueIdentifier} - ${issueTitle}
@@ -266,7 +193,7 @@ Respond as if you're a helpful teammate who can assist with code, documentation,
   private getFallbackResponse(_prompt: string): string {
     console.log('🔄 Using fallback response due to API unavailability');
     
-    return `Hi there! 👋 I'm the OpenCode Agent. I see you mentioned me, but I'm having trouble connecting to my AI services right now.
+    return `Hi there! 👋 I'm OpenCode Agent. I see you mentioned me, but I'm having trouble connecting to my AI services right now.
 
 I'm here to help with development tasks like:
 - Code review and analysis
@@ -293,15 +220,15 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     try {
       console.log('🔗 Creating OpenCode session via opencode serve...');
       
+      const serveUrl = await this.getOpenCodeServeUrl();
+      
       const sessionData = {
-        title: `Linear Issue: ${linearContext.issueTitle}`,
-        parentID: null // Optional: can link to parent session if needed
+        title: `Linear Issue: ${linearContext.issueTitle}`
       };
 
-      const response = await fetch(`${this.opencodeServeUrl}/session`, {
+      const response = await fetch(`${serveUrl}/session`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
           'User-Agent': 'Linear-Agent/1.0'
         },
@@ -337,7 +264,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
   async sendSessionMessage(
     sessionId: string,
     message: string,
-    stream: boolean = false
+    _stream: boolean = false
   ): Promise<string> {
     if (!this.opencodeServeEnabled) {
       throw new Error('OpenCode Serve integration is not enabled');
@@ -345,6 +272,8 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
     try {
       console.log(`💬 Sending message to OpenCode session ${sessionId}...`);
+      
+      const serveUrl = await this.getOpenCodeServeUrl();
       
       const messageData: OpenCodeCreateMessageRequest = {
         parts: [
@@ -355,10 +284,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
         ]
       };
 
-      const response = await fetch(`${this.opencodeServeUrl}/session/${sessionId}/message`, {
+      const response = await fetch(`${serveUrl}/session/${sessionId}/message`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
           'User-Agent': 'Linear-Agent/1.0'
         },
@@ -372,7 +300,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
       const data: OpenCodeMessageResponse = await response.json();
       
-      // Extract the assistant's response from the parts
+      // Extract the assistant's response from the last message part
       const assistantPart = data.parts.find(part => part.type === 'text' && part.text);
       const content = assistantPart?.text || data.parts[data.parts.length - 1]?.text || '';
       
@@ -400,7 +328,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     }
 
     try {
-      const response = await fetch(`${this.opencodeServeUrl}/session/${sessionId}`, {
+      const serveUrl = await this.getOpenCodeServeUrl();
+      
+      const response = await fetch(`${serveUrl}/session/${sessionId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -426,7 +356,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
    * @author Joshua Rentrope <joshua@opencode.ai>
    * @issue JOS-145
    */
-  async completeSession(sessionId: string, reason?: string): Promise<void> {
+  async completeSession(sessionId: string, _reason?: string): Promise<void> {
     if (!this.opencodeServeEnabled) {
       throw new Error('OpenCode Serve integration is not enabled');
     }
@@ -434,7 +364,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     try {
       console.log(`🏁 Completing OpenCode session ${sessionId}...`);
       
-      const response = await fetch(`${this.opencodeServeUrl}/session/${sessionId}/abort`, {
+      const serveUrl = await this.getOpenCodeServeUrl();
+      
+      const response = await fetch(`${serveUrl}/session/${sessionId}/abort`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -455,8 +387,6 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       throw error;
     }
   }
-
-
 
   /**
    * Generate a response using session context
@@ -539,7 +469,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     }
 
     try {
-      const response = await fetch(`${this.opencodeServeUrl}/health`, {
+      const serveUrl = await this.getOpenCodeServeUrl();
+      
+      const response = await fetch(`${serveUrl}/health`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,

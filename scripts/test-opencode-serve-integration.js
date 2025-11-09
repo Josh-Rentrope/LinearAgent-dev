@@ -10,12 +10,25 @@
  * @issue JOS-145
  */
 
-import dotenv from 'dotenv';
-import { openCodeClient } from '../src/integrations/opencode-client';
-import { OpenCodeSessionManager } from '../src/sessions/opencode-session-manager';
+const dotenv = require('dotenv');
 
-// Load environment variables
+// Load environment variables BEFORE importing modules
 dotenv.config();
+
+// Debug: Check if environment variables are loaded
+console.log('🔍 Debug - Environment variables:');
+console.log(`   OPENCODE_SERVE_ENABLED: ${process.env.OPENCODE_SERVE_ENABLED}`);
+console.log(`   OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? '***' : 'not set'}`);
+console.log(`   OPENCODE_SERVE_URL: ${process.env.OPENCODE_SERVE_URL || 'not set'}`);
+
+const { openCodeClient } = require('../dist/integrations/opencode-client');
+const { OpenCodeSessionManager } = require('../dist/sessions/opencode-session-manager');
+
+// Debug: Check if environment variables are loaded
+console.log('🔍 Debug - Environment variables:');
+console.log(`   OPENCODE_SERVE_ENABLED: ${process.env.OPENCODE_SERVE_ENABLED}`);
+console.log(`   OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? '***' : 'not set'}`);
+console.log(`   OPENCODE_SERVE_URL: ${process.env.OPENCODE_SERVE_URL || 'not set'}`);
 
 async function testOpenCodeServeIntegration() {
   console.log('🧪 Testing OpenCode Serve Integration...\n');
