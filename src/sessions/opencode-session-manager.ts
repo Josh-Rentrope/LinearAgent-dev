@@ -104,6 +104,22 @@ export class OpenCodeSessionManager {
   }
 
   /**
+   * Reactivate a completed or timed-out session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-147
+   */
+  reactivateSession(sessionId: string): OpenCodeSession | null {
+    const session = this.sessions.get(sessionId)
+    if (session && (session.status === 'completed' || session.status === 'timeout')) {
+      session.status = 'active'
+      session.lastActivity = new Date().toISOString()
+      console.log(`🔄 Reactivated session ${sessionId}`)
+      return session
+    }
+    return null
+  }
+
+  /**
    * Link OpenCode session ID to our session
    * @author Joshua Rentrope <joshua@opencode.ai>
    * @issue JOS-145

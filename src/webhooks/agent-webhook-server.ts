@@ -118,32 +118,77 @@ class LinearAgentWebhookServer {
   }
 
   /**
-   * Check if comment should trigger a session (complex request)
+   * Check if comment is a help/guide request
    */
-  private shouldCreateSession(commentBody: string): boolean {
-    const sessionTriggers = [
-      'help me',
-      'can you help',
-      'i need help',
-      'assist me',
-      'work on',
-      'implement',
-      'create',
-      'build',
-      'develop',
-      'debug',
-      'fix',
-      'analyze',
-      'review',
-      'session',
-      'start a session',
-      'let\'s work',
-      'let us work'
+  private isHelpRequest(commentBody: string): boolean {
+    const helpPatterns = [
+      '@opencodeintegration help',
+      '@opencodeintegration guide',
+      '@opencodeagent help', 
+      '@opencodeagent guide',
+      'help',
+      'guide'
     ];
 
-    const lowerBody = commentBody.toLowerCase();
-    return sessionTriggers.some(trigger => lowerBody.includes(trigger)) ||
-           lowerBody.length > 200; // Long comments likely need sessions
+    const lowerBody = commentBody.toLowerCase().trim();
+    return helpPatterns.some(pattern => lowerBody === pattern || 
+           lowerBody.endsWith(pattern) || 
+           lowerBody.includes(pattern));
+  }
+
+  /**
+   * Generate help/guide response
+   */
+  private generateHelpResponse(): string {
+    return `👋 **Welcome to OpenCode Integration!**
+
+I'm here to help you with development tasks and code-related work. Here are some ways I can assist:
+
+**🛠️ Development Tasks:**
+• Implement new features and functionality
+• Debug and fix issues in your codebase
+• Review and optimize existing code
+• Create tests and improve test coverage
+• Refactor code for better maintainability
+• Set up project configurations and tooling
+
+**💬 Session-Based Work:**
+• Start a development session by mentioning me with any task
+• I'll maintain context across multiple messages
+• Perfect for complex, multi-step projects
+• Sessions automatically timeout after 30 minutes
+
+**📝 Example Prompts:**
+• \`@opencodeintegration implement user authentication\`
+• \`@opencodeintegration debug the login issue\`
+• \`@opencodeintegration review this pull request\`
+• \`@opencodeintegration create unit tests for the API\`
+
+**🚀 Getting Started:**
+Just mention me with any development task, and I'll create a session to help you accomplish it!
+
+Need more specific guidance? Just ask what you're working on!`;
+  }
+
+  /**
+   * Find relevant existing session for the user
+   */
+  private findRelevantSession(userId: string, issueId?: string): OpenCodeSession | null {
+    const userSessions = Array.from(this.sessionManager.sessions.values())
+      .filter(session => session.linearContext.userId === userId)
+      .filter(session => session.status === 'completed' || session.status === 'timeout')
+      .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime());
+
+    // Prefer sessions from the same issue
+    if (issueId) {
+      const sameIssueSession = userSessions.find(session => session.linearContext.issueId === issueId);
+      if (sameIssueSession) {
+        return sameIssueSession;
+      }
+    }
+
+    // Return the most recent inactive session
+    return userSessions[0] || null;
   }
 
   /**
@@ -377,26 +422,51 @@ class LinearAgentWebhookServer {
 
       console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
 
-      // Determine if we should create a session
-      const shouldCreateSession = this.shouldCreateSession(commentData.body);
+      // Check if this is a help/guide request
+      if (this.isHelpRequest(commentData.body)) {
+        console.log(`📚 Providing help/guide response for comment ${commentData.id}`);
+        const response = this.generateHelpResponse();
+        
+        await emitResponse(
+          `webhook-${commentData.id}`,
+          response,
+          commentData.issue.id
+        );
+
+        console.log(`✅ Help response sent for comment ${commentData.id}`);
+        res.json({ received: true, responded: true, helpProvided: true });
+        return;
+      }
+
+      // Default to creating sessions for all other mentions
+      console.log(`🔄 Creating session for mention in comment ${commentData.id}`);
+      
+      const sessionContext = this.extractSessionContext(commentData);
       let response: string;
 
-      if (shouldCreateSession) {
-        console.log(`🔄 Creating session for complex request in comment ${commentData.id}`);
-        
-        const sessionContext = this.extractSessionContext(commentData);
-        if (sessionContext) {
-          response = await this.handleSessionResponse(sessionContext, commentData.body);
+      if (sessionContext) {
+        // Check if there's an existing relevant session we can reactivate
+        const existingSession = this.findRelevantSession(
+          sessionContext.userId, 
+          sessionContext.issueId
+        );
+
+        if (existingSession) {
+          console.log(`🔄 Found relevant existing session ${existingSession.id}, reactivating`);
+          // Reactivate the existing session
+          const reactivatedSession = this.sessionManager.reactivateSession(existingSession.id);
+          if (reactivatedSession) {
+            response = await this.handleSessionResponse(sessionContext, commentData.body);
+          } else {
+            // Reactivation failed, create new session
+            response = await this.handleSessionResponse(sessionContext, commentData.body);
+          }
         } else {
-          // Fall back to regular response if context extraction fails
-          response = await this.generateOpenCodeResponse(
-            commentData.body,
-            commentData.issue.title,
-            commentData.issue.identifier
-          );
+          // Create new session
+          response = await this.handleSessionResponse(sessionContext, commentData.body);
         }
       } else {
-        // Simple request, use regular response
+        // Fall back to regular response if context extraction fails
         response = await this.generateOpenCodeResponse(
           commentData.body,
           commentData.issue.title,
