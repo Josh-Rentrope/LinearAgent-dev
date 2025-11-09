@@ -41,7 +41,7 @@ export interface SessionCreateOptions {
  * @issue JOS-145
  */
 export class OpenCodeSessionManager {
-  private sessions = new Map<string, OpenCodeSession>()
+  public sessions = new Map<string, OpenCodeSession>()
   private cleanupInterval: NodeJS.Timeout | null = null
 
   constructor() {

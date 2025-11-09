@@ -12,7 +12,7 @@ import { LinearClient } from '@linear/sdk';
 import { linearWebhookMiddleware } from '../security/signature-verification';
 import { emitResponse } from '../activities/activity-emitter';
 import { openCodeClient } from '../integrations/opencode-client';
-import OpenCodeSessionManager, { SessionContext } from '../sessions/opencode-session-manager';
+import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sessions/opencode-session-manager';
 
 
 
@@ -481,7 +481,7 @@ Need more specific guidance? Just ask what you're working on!`;
       );
 
       console.log(`✅ Response sent for comment ${commentData.id}`);
-      res.json({ received: true, responded: true, sessionCreated: shouldCreateSession });
+      res.json({ received: true, responded: true, sessionCreated: true });
 
     } catch (error) {
       console.error('❌ Webhook handling error:', error);
