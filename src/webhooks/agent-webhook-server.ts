@@ -430,7 +430,8 @@ Need more specific guidance? Just ask what you're working on!`;
         await emitResponse(
           `webhook-${commentData.id}`,
           response,
-          commentData.issue.id
+          commentData.issue.id,
+          commentData.id // Use the triggering comment as parent for threaded reply
         );
 
         console.log(`✅ Help response sent for comment ${commentData.id}`);
@@ -477,7 +478,8 @@ Need more specific guidance? Just ask what you're working on!`;
       await emitResponse(
         `webhook-${commentData.id}`,
         response,
-        commentData.issue.id
+        commentData.issue.id,
+        commentData.id // Use the triggering comment as parent for threaded reply
       );
 
       console.log(`✅ Response sent for comment ${commentData.id}`);

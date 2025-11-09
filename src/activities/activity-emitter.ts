@@ -13,6 +13,7 @@ interface Activity {
   content: string;
   issueId: string;
   externalUrl?: string;
+  parentCommentId?: string; // For threaded replies
   signal?: {
     type: 'auth' | 'select' | 'stop';
     payload?: any;
@@ -49,10 +50,17 @@ export async function emitActivity(activity: Activity): Promise<void> {
     if (activity.type === 'response') {
       console.log(`💬 Creating Linear comment for issue ${activity.issueId}`);
       
-      await linearClient.createComment({
+      const commentData: any = {
         issueId: activity.issueId,
         body: activity.content
-      });
+      };
+      
+      // Add parent comment ID for threaded replies if provided
+      if (activity.parentCommentId) {
+        commentData.parentId = activity.parentCommentId;
+      }
+      
+      await linearClient.createComment(commentData);
       
       console.log(`✅ Comment created successfully in Linear`);
     } else {
@@ -123,13 +131,15 @@ export async function emitElicitation(
 export async function emitResponse(
   sessionId: string,
   content: string,
-  issueId: string
+  issueId: string,
+  parentCommentId?: string
 ): Promise<void> {
   await emitActivity({
     sessionId,
     type: 'response',
     content: content,
-    issueId
+    issueId,
+    ...(parentCommentId && { parentCommentId })
   });
 }
 
