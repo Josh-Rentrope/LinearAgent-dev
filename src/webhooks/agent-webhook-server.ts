@@ -342,154 +342,185 @@ Need more specific guidance? Just ask what you're working on!`;
   }
 
   /**
-   * Handle incoming webhook events
+   * Handle incoming webhook events with proper async timing for elicitations
    */
   private async handleWebhook(req: express.Request, res: express.Response): Promise<void> {
-    try {
-      const event = req.body;
-      
-      // Debug: Log full webhook payload structure
-      console.log('🔍 Full webhook payload:', JSON.stringify(event, null, 2));
-      
-      // Validate webhook payload structure
-      if (!event) {
-        console.error('❌ No webhook payload received');
-        res.status(400).json({ error: 'No payload received' });
-        return;
-      }
+     try {
+       const event = req.body;
+       
+       // Debug: Log full webhook payload structure
+       console.log('🔍 Full webhook payload:', JSON.stringify(event, null, 2));
+       
+       // Validate webhook payload structure
+       if (!event) {
+         console.error('❌ No webhook payload received');
+         res.status(400).json({ error: 'No payload received' });
+         return;
+       }
 
-      console.log(`📥 Webhook event details:`, {
-        action: event.action,
-        type: event.type,
-        hasData: !!event.data,
-        dataType: event.data?.type,
-        url: event.url
-      });
+       console.log(`📥 Webhook event details:`, {
+         action: event.action,
+         type: event.type,
+         hasData: !!event.data,
+         dataType: event.data?.type,
+         url: event.url
+       });
 
-      // Only handle Comment events (type is at root level, not in data)
-      if (event.type !== 'Comment') {
-        console.log(`⏭️  Skipping non-Comment event: ${event.type}`);
-        res.json({ received: true });
-        return;
-      }
+       // Only handle Comment events (type is at root level, not in data)
+       if (event.type !== 'Comment') {
+         console.log(`⏭️  Skipping non-Comment event: ${event.type}`);
+         res.json({ received: true });
+         return;
+       }
 
-      // Check if event.data exists and has required fields
-      if (!event.data || typeof event.data !== 'object') {
-        console.log('⏭️  No event.data object, skipping');
-        res.json({ received: true });
-        return;
-      }
+       // Check if event.data exists and has required fields
+       if (!event.data || typeof event.data !== 'object') {
+         console.log('⏭️  No event.data object, skipping');
+         res.json({ received: true });
+         return;
+       }
 
-      const commentData = event.data as unknown as CommentData;
-      
-      // Validate comment data structure
-      if (!commentData.id) {
-        console.error('❌ Comment data missing required id field');
-        res.status(400).json({ error: 'Invalid comment data' });
-        return;
-      }
+       const commentData = event.data as unknown as CommentData;
+       
+       // Validate comment data structure
+       if (!commentData.id) {
+         console.error('❌ Comment data missing required id field');
+         res.status(400).json({ error: 'Invalid comment data' });
+         return;
+       }
 
-      console.log(`📝 Processing comment ${commentData.id}:`, {
-        hasBody: !!commentData.body,
-        hasUser: !!commentData.user,
-        hasIssue: !!commentData.issue,
-        bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
-      });
-      
-      // Skip if we've already processed this comment
-      if (this.processedComments.has(commentData.id)) {
-        console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
-        res.json({ received: true });
-        return;
-      }
+       console.log(`📝 Processing comment ${commentData.id}:`, {
+         hasBody: !!commentData.body,
+         hasUser: !!commentData.user,
+         hasIssue: !!commentData.issue,
+         bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
+       });
+       
+       // Skip if we've already processed this comment
+       if (this.processedComments.has(commentData.id)) {
+         console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
+         res.json({ received: true });
+         return;
+       }
 
-      // Mark as processed to prevent duplicates
-      this.processedComments.add(commentData.id);
+       // Mark as processed to prevent duplicates
+       this.processedComments.add(commentData.id);
 
-      // Skip if comment is from the agent itself
-      if (commentData.user?.id === this.agentUserId) {
-        console.log(`⏭️  Skipping own comment ${commentData.id}`);
-        res.json({ received: true });
-        return;
-      }
+       // Skip if comment is from the agent itself
+       if (commentData.user?.id === this.agentUserId) {
+         console.log(`⏭️  Skipping own comment ${commentData.id}`);
+         res.json({ received: true });
+         return;
+       }
 
-      // Check if agent is mentioned
-      if (!commentData.body || !this.isAgentMentioned(commentData.body)) {
-        console.log(`⏭️  Agent not mentioned in comment ${commentData.id}`);
-        res.json({ received: true });
-        return;
-      }
+       // Check if agent is mentioned
+       if (!commentData.body || !this.isAgentMentioned(commentData.body)) {
+         console.log(`⏭️  Agent not mentioned in comment ${commentData.id}`);
+         res.json({ received: true });
+         return;
+       }
 
-      console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+       console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
 
-      // Check if this is a help/guide request
-      if (this.isHelpRequest(commentData.body)) {
-        console.log(`📚 Providing help/guide response for comment ${commentData.id}`);
-        const response = this.generateHelpResponse();
-        
-        await emitResponse(
-          `webhook-${commentData.id}`,
-          response,
-          commentData.issue.id,
-          commentData.id // Use the triggering comment as parent for threaded reply
-        );
+       // Immediately acknowledge webhook to prevent Linear timeout
+       // This ensures Linear doesn't close the interaction while we process
+       res.json({ received: true, processing: true });
 
-        console.log(`✅ Help response sent for comment ${commentData.id}`);
-        res.json({ received: true, responded: true, helpProvided: true });
-        return;
-      }
+       // Process response asynchronously to avoid blocking webhook acknowledgment
+       this.processAgentResponse(commentData).catch(error => {
+         console.error('❌ Async response processing failed:', error);
+       });
 
-      // Default to creating sessions for all other mentions
-      console.log(`🔄 Creating session for mention in comment ${commentData.id}`);
-      
-      const sessionContext = this.extractSessionContext(commentData);
-      let response: string;
+     } catch (error) {
+       console.error('❌ Webhook handling error:', error);
+       res.status(500).json({ error: 'Internal server error' });
+     }
+   }
 
-      if (sessionContext) {
-        // Check if there's an existing relevant session we can reactivate
-        const existingSession = this.findRelevantSession(
-          sessionContext.userId, 
-          sessionContext.issueId
-        );
+   /**
+   * Process agent response asynchronously with proper timing synchronization
+   */
+   private async processAgentResponse(commentData: CommentData): Promise<void> {
+     try {
+       // Check if this is a help/guide request
+       if (this.isHelpRequest(commentData.body)) {
+         console.log(`📚 Providing help/guide response for comment ${commentData.id}`);
+         const response = this.generateHelpResponse();
+         
+         await emitResponse(
+           `webhook-${commentData.id}`,
+           response,
+           commentData.issue.id,
+           commentData.id // Use the triggering comment as parent for threaded reply
+         );
 
-        if (existingSession) {
-          console.log(`🔄 Found relevant existing session ${existingSession.id}, reactivating`);
-          // Reactivate the existing session
-          const reactivatedSession = this.sessionManager.reactivateSession(existingSession.id);
-          if (reactivatedSession) {
-            response = await this.handleSessionResponse(sessionContext, commentData.body);
-          } else {
-            // Reactivation failed, create new session
-            response = await this.handleSessionResponse(sessionContext, commentData.body);
-          }
-        } else {
-          // Create new session
-          response = await this.handleSessionResponse(sessionContext, commentData.body);
-        }
-      } else {
-        // Fall back to regular response if context extraction fails
-        response = await this.generateOpenCodeResponse(
-          commentData.body,
-          commentData.issue.title,
-          commentData.issue.identifier
-        );
-      }
+         console.log(`✅ Help response sent for comment ${commentData.id}`);
+         return;
+       }
 
-      await emitResponse(
-        `webhook-${commentData.id}`,
-        response,
-        commentData.issue.id,
-        commentData.id // Use the triggering comment as parent for threaded reply
-      );
+       // Default to creating sessions for all other mentions
+       console.log(`🔄 Creating session for mention in comment ${commentData.id}`);
+       
+       const sessionContext = this.extractSessionContext(commentData);
+       let response: string;
 
-      console.log(`✅ Response sent for comment ${commentData.id}`);
-      res.json({ received: true, responded: true, sessionCreated: true });
+       if (sessionContext) {
+         // Check if there's an existing relevant session we can reactivate
+         const existingSession = this.findRelevantSession(
+           sessionContext.userId, 
+           sessionContext.issueId
+         );
 
-    } catch (error) {
-      console.error('❌ Webhook handling error:', error);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  }
+         if (existingSession) {
+           console.log(`🔄 Found relevant existing session ${existingSession.id}, reactivating`);
+           // Reactivate the existing session
+           const reactivatedSession = this.sessionManager.reactivateSession(existingSession.id);
+           if (reactivatedSession) {
+             response = await this.handleSessionResponse(sessionContext, commentData.body);
+           } else {
+             // Reactivation failed, create new session
+             response = await this.handleSessionResponse(sessionContext, commentData.body);
+           }
+         } else {
+           // Create new session
+           response = await this.handleSessionResponse(sessionContext, commentData.body);
+         }
+       } else {
+         // Fall back to regular response if context extraction fails
+         response = await this.generateOpenCodeResponse(
+           commentData.body,
+           commentData.issue.title,
+           commentData.issue.identifier
+         );
+       }
+
+       await emitResponse(
+         `webhook-${commentData.id}`,
+         response,
+         commentData.issue.id,
+         commentData.id // Use the triggering comment as parent for threaded reply
+       );
+
+       console.log(`✅ Response sent for comment ${commentData.id}`);
+
+     } catch (error) {
+       console.error('❌ Agent response processing failed:', error);
+       
+       // Try to send error response to Linear
+       try {
+         const errorResponse = `❌ Sorry, I encountered an error while processing your request: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`;
+         
+         await emitResponse(
+           `webhook-${commentData.id}-error`,
+           errorResponse,
+           commentData.issue.id,
+           commentData.id
+         );
+       } catch (emitError) {
+         console.error('❌ Failed to send error response:', emitError);
+       }
+     }
+   }
 
   /**
    * Start the webhook server

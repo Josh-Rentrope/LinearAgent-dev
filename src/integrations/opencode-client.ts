@@ -258,8 +258,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Send a message to an OpenCode session using opencode serve API
+   * Enhanced with timeout handling for elicitations framework
    * @author Joshua Rentrope <joshua@opencode.ai>
-   * @issue JOS-145
+   * @issue JOS-145, JOS-150
    */
   async sendSessionMessage(
     sessionId: string,
@@ -284,14 +285,24 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
         ]
       };
 
+      // Add timeout to prevent hanging requests (important for elicitations timing)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.warn(`⏰ Session message timeout for ${sessionId}, aborting request`);
+        controller.abort();
+      }, 45000); // 45 second timeout - less than Linear's typical 60s timeout
+
       const response = await fetch(`${serveUrl}/session/${sessionId}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'Linear-Agent/1.0'
         },
-        body: JSON.stringify(messageData)
+        body: JSON.stringify(messageData),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorData: OpenCodeError = await response.json().catch(() => ({}));
@@ -313,6 +324,12 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
     } catch (error) {
       console.error(`❌ Failed to send message to session ${sessionId}:`, error);
+      
+      // Handle timeout specifically for elicitations framework
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Session response timeout - OpenCode took too long to respond. Please try again with a simpler request.`);
+      }
+      
       throw error;
     }
   }
@@ -390,8 +407,9 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Generate a response using session context
+   * Enhanced with timeout handling for elicitations framework
    * @author Joshua Rentrope <joshua@opencode.ai>
-   * @issue JOS-145
+   * @issue JOS-145, JOS-150
    */
   async generateSessionResponse(
     session: OpenCodeSession,
@@ -407,15 +425,30 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     }
 
     try {
-      const response = await this.sendSessionMessage(
+      // Add overall timeout for session response generation
+      const responsePromise = this.sendSessionMessage(
         session.opencodeSessionId,
         userMessage,
         false // Don't stream for now
       );
 
+      const timeoutPromise = new Promise<string>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Session response generation timeout - please try again'));
+        }, 50000); // 50 second total timeout
+      });
+
+      const response = await Promise.race([responsePromise, timeoutPromise]);
+
       return typeof response === 'string' ? response : 'Streaming response received';
     } catch (error) {
       console.error('❌ Session response failed, falling back to regular response:', error);
+      
+      // Provide user-friendly error message for timeouts
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return `⏰ Sorry, I'm taking too long to respond. This might be due to a complex request or server issues. Please try again with a simpler request or break it into smaller parts.`;
+      }
+      
       return this.generateLinearResponse(
         userMessage,
         session.linearContext.issueTitle,
