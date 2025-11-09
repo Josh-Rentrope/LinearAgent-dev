@@ -232,7 +232,7 @@ class LinearAgentWebhookServer {
             
             this.sessionManager.linkOpenCodeSession(
               session.id,
-              opencodeSession.sessionId
+              opencodeSession.id
             );
             
             this.sessionManager.updateSessionStatus(session.id, 'active');
