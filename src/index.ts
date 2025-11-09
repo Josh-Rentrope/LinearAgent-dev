@@ -6,7 +6,7 @@
  */
 
 import dotenv from 'dotenv';
-import { validateOAuthConfig } from './oauth/linear-oauth-config';
+import LinearAgentWebhookServer from './webhooks/agent-webhook-server';
 
 // Load environment variables
 dotenv.config();
@@ -17,28 +17,32 @@ dotenv.config();
 async function main(): Promise<void> {
   console.log('🤖 Starting OpenCode Linear Agent...');
   
-  // Validate configuration
-  if (!validateOAuthConfig()) {
-    console.error('❌ Invalid OAuth configuration. Please check your environment variables.');
-    console.log('Required variables:');
-    console.log('- LINEAR_CLIENT_ID');
-    console.log('- LINEAR_CLIENT_SECRET');
-    console.log('- LINEAR_WEBHOOK_SECRET');
-    console.log('- LINEAR_AGENT_PUBLIC_URL');
+  // Log configuration (without secrets)
+  console.log('📋 Agent Configuration:');
+  console.log(`- Agent Name: ${process.env.LINEAR_AGENT_NAME || 'OpenCode Agent'}`);
+  console.log(`- Webhook Port: ${process.env.LINEAR_WEBHOOK_PORT || 3000}`);
+  console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`- OpenCode API: ${process.env.OPENCODE_API_BASE_URL || 'https://api.opencode.dev'}`);
+  
+  // Check essential variables
+  const botToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
+  const openCodeKey = process.env.OPENCODE_API_KEY;
+  
+  if (!botToken) {
+    console.error('❌ LINEAR_BOT_OAUTH_TOKEN is required');
     process.exit(1);
   }
   
-  console.log('✅ OAuth configuration validated');
+  if (!openCodeKey) {
+    console.warn('⚠️  OPENCODE_API_KEY not configured, using fallback responses');
+  }
   
-  // Log configuration (without secrets)
-  console.log('📋 Agent Configuration:');
-  console.log(`- Public URL: ${process.env.LINEAR_AGENT_PUBLIC_URL}`);
-  console.log(`- Webhook Port: ${process.env.LINEAR_WEBHOOK_PORT || 3000}`);
-  console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`- Log Level: ${process.env.LOG_LEVEL || 'info'}`);
+  console.log('✅ Configuration validated');
   
   // Start webhook server
-  await import('./webhooks/agent-webhook-server');
+  const server = new LinearAgentWebhookServer();
+  await server.start();
+  
   console.log('🚀 Linear Agent is ready to receive events!');
   
   // Graceful shutdown handling

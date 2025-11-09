@@ -5,8 +5,12 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:webhook": "tsx watch src/webhooks/agent-webhook-server.ts",
+    "dev:simple": "tsx watch src/webhooks/simple-webhook-server.ts",
     "build": "tsc",
     "start": "node -r dotenv/config dist/index.js",
+    "start:webhook": "node -r dotenv/config dist/webhooks/agent-webhook-server.js",
+    "start:simple": "node -r dotenv/config dist/webhooks/simple-webhook-server.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",

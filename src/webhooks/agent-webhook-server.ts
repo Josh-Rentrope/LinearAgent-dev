@@ -1,208 +1,278 @@
 /**
  * Linear Agent Webhook Server
  * 
- * Express server for handling Linear agent webhook events
- * including agent sessions, mentions, and notifications.
+ * Main webhook server for handling Linear events and agent mentions.
+ * Uses bot OAuth token to prevent infinite loops and integrates with OpenCode LLM.
  */
 
 import express from 'express';
-import { linearWebhookMiddleware, webhookRateLimiter } from '../security/signature-verification';
-import { handleAgentSessionEvent } from './handlers/agent-session-handler';
-import { handleAgentSessionEvent as handleAgentSessionEventHandler } from './handlers/agent-session-event-handler';
-import { handleCommentEvent } from './handlers/comment-handler';
-import { handleInboxNotification } from './handlers/inbox-notification-handler';
-import { handlePermissionChange } from './handlers/permission-change-handler';
+import cors from 'cors';
+import helmet from 'helmet';
+import { LinearClient } from '@linear/sdk';
+import { linearWebhookMiddleware } from '../security/signature-verification';
+import { emitResponse } from '../activities/activity-emitter';
+import { openCodeClient } from '../integrations/opencode-client';
 
-const app = express();
-const PORT = process.env.LINEAR_WEBHOOK_PORT || 3000;
 
-// In-memory store to track agent user IDs from recent events
-const agentUserStore = new Map<string, { agentUserId: string; timestamp: number }>();
 
-// In-memory store to track recently processed events to prevent duplicates
-const processedEvents = new Map<string, { timestamp: number; eventType: string }>();
+interface CommentData {
+  id: string;
+  body: string;
+  issue: {
+    id: string;
+    identifier: string;
+    title: string;
+  };
+  user: {
+    id: string;
+    name: string;
+  };
+}
 
-// Clean up old entries (older than 5 minutes)
-setInterval(() => {
-  const now = Date.now();
-  const fiveMinutes = 5 * 60 * 1000;
+class LinearAgentWebhookServer {
+  private app: express.Application;
+  private linearClient: LinearClient | null = null;
+  private agentUserId: string | null = null;
+  private agentName: string;
+  private processedComments = new Set<string>();
   
-  // Clean agent user store
-  for (const [_key, value] of agentUserStore.entries()) {
-    if (now - value.timestamp > fiveMinutes) {
-      agentUserStore.delete(_key);
-    }
+  constructor() {
+    this.app = express();
+    this.agentName = process.env.LINEAR_AGENT_NAME || 'OpenCode Agent';
+    this.setupMiddleware();
+    this.setupRoutes();
   }
-  
-  // Clean processed events store
-  for (const [_key, value] of processedEvents.entries()) {
-    if (now - value.timestamp > fiveMinutes) {
-      processedEvents.delete(_key);
-    }
+
+  private setupMiddleware(): void {
+    this.app.use(helmet());
+    this.app.use(cors());
+    this.app.use(express.json({ limit: '10mb' }));
+    this.app.use('/webhooks/linear-agent', linearWebhookMiddleware);
   }
-}, 60000); // Clean every minute
 
-// Middleware - IMPORTANT: raw must come before json for signature verification
-app.use(express.raw({ type: 'application/json' })); // For signature verification
-app.use(express.json());
+  private setupRoutes(): void {
+    // Health check endpoint
+    this.app.get('/health', (_req, res) => {
+      res.json({ 
+        status: 'healthy', 
+        agent: this.agentName,
+        timestamp: new Date().toISOString()
+      });
+    });
 
-// Health check endpoint
-app.get('/health', (_req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
+    // Main webhook endpoint
+    this.app.post('/webhooks/linear-agent', this.handleWebhook.bind(this));
+  }
 
-// Main webhook endpoint for Linear agent events
-app.post('/webhooks/linear-agent', 
-  linearWebhookMiddleware,
-  async (req, res) => {
-    // Rate limiting by IP
-    const clientId = req.ip || req.connection?.remoteAddress || 'unknown';
-    if (!webhookRateLimiter.isAllowed(clientId)) {
-      return res.status(429).json({ error: 'Too many requests' });
-    }
-    
+  /**
+   * Initialize the Linear client with bot OAuth token
+   */
+  private async initializeLinearClient(): Promise<boolean> {
     try {
-      // Parse body from Buffer if needed
-      let event;
-      if (req.body instanceof Buffer) {
-        event = JSON.parse(req.body.toString());
-      } else {
-        event = req.body;
+      const botOAuthToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
+      
+      if (!botOAuthToken) {
+        console.error('❌ LINEAR_BOT_OAUTH_TOKEN not configured');
+        return false;
       }
+
+      this.linearClient = new LinearClient({ apiKey: botOAuthToken });
       
-      const eventType = event.type || event.action;
-      const eventId = event.id || `${eventType}-${Date.now()}`;
-      
-      // Check if we've already processed this event
-      const existingEvent = processedEvents.get(eventId);
-      if (existingEvent && existingEvent.eventType === eventType) {
-        console.log(`⏭️ Skipping duplicate event: ${eventId} (${eventType})`);
-        return res.json({ received: true, type: eventType, duplicate: true });
+      // Get bot user info
+      const viewer = await this.linearClient.viewer;
+      if (!viewer) {
+        console.error('❌ Failed to get bot user info');
+        return false;
       }
+
+      this.agentUserId = viewer.id;
+      console.log(`✅ Bot initialized: ${viewer.name} (${viewer.id})`);
       
-      // Mark this event as processed
-      processedEvents.set(eventId, {
-        timestamp: Date.now(),
-        eventType
-      });
-      
-      console.log(`🔔 Received Linear event: ${eventType}`, {
-        eventId,
-        type: eventType,
-        timestamp: new Date().toISOString(),
-        fullEvent: JSON.stringify(event, null, 2)
-      });
-      
-      // Route to appropriate handler based on event type
-      switch (eventType) {
-        case 'AppUserNotification':
-          try {
-            // Store agent user ID from AppUserNotification for later use
-            if (event.appUserId) {
-              agentUserStore.set(event.appUserId, {
-                agentUserId: event.appUserId,
-                timestamp: Date.now()
-              });
-            }
-            await handleAgentSessionEvent(event);
-            return res.json({ received: true, type: eventType });
-          } catch (error) {
-            console.error('AppUserNotification handler error:', error);
-            return res.status(500).json({ error: 'Handler error' });
-          }
-          break;
-          
-        case 'Comment':
-          try {
-            // Try to get agent user ID from our store or environment
-            let agentUserId = process.env.LINEAR_AGENT_USER_ID;
-            
-            // Also try to find from recent AppUserNotification events
-            if (!agentUserId) {
-              for (const [key, value] of agentUserStore.entries()) {
-                if (Date.now() - value.timestamp < 5 * 60 * 1000) { // 5 minutes
-                  agentUserId = value.agentUserId;
-                  break;
-                }
-              }
-            }
-            
-            await handleCommentEvent(event, agentUserId);
-            return res.json({ received: true, type: eventType });
-          } catch (error) {
-            console.error('Comment handler error:', error);
-            return res.status(500).json({ error: 'Handler error' });
-          }
-          break;
-          
-        case 'AgentSession.created':
-        case 'AgentSession.prompted':
-          try {
-            await handleAgentSessionEventHandler(event);
-            return res.json({ received: true, type: eventType });
-          } catch (error) {
-            console.error('AgentSession handler error:', error);
-            return res.status(500).json({ error: 'Handler error' });
-          }
-          break;
-          
-        case 'InboxNotification.created':
-          try {
-            await handleInboxNotification(event);
-            return res.json({ received: true, type: eventType });
-          } catch (error) {
-            console.error('InboxNotification handler error:', error);
-            return res.status(500).json({ error: 'Handler error' });
-          }
-          break;
-          
-        case 'PermissionChange.created':
-          try {
-            await handlePermissionChange(event);
-            return res.json({ received: true, type: eventType });
-          } catch (error) {
-            console.error('PermissionChange handler error:', error);
-            return res.status(500).json({ error: 'Handler error' });
-          }
-          break;
-          
-        default:
-          console.log(`🤷 Unhandled event type: ${eventType}`, {
-            eventType,
-            availableKeys: Object.keys(event),
-            fullEvent: JSON.stringify(event, null, 2)
-          });
-          return res.json({ received: true, type: eventType, handled: false });
-      }
+      return true;
     } catch (error) {
-      console.error('Webhook processing error:', error);
-      return res.status(500).json({ error: 'Processing error' });
+      console.error('❌ Failed to initialize Linear client:', error);
+      return false;
     }
   }
-  
-);
 
-// OAuth callback endpoint
-app.get('/auth/callback', (req, res) => {
-  const { code, state } = req.query;
-  
-  // Handle OAuth callback for agent installation
-  console.log('OAuth callback received:', { code: !!code, state });
-  
-  // TODO: Exchange code for access token
-  // TODO: Store installation details
-  
-  res.json({ 
-    message: 'Linear Agent installation successful!',
-    status: 'installed'
+  /**
+   * Check if comment mentions the agent
+   */
+  private isAgentMentioned(commentBody: string): boolean {
+    const mentionPatterns = [
+      `@${this.agentName}`,
+      `@${this.agentName.replace(/\s+/g, '')}`,
+      `@${this.agentName.replace(/\s+/g, '').toLowerCase()}`,
+      '@opencodeintegration', // Handle the actual mention from logs
+      '@opencodeagent',
+      'opencode integration',
+      'opencode agent'
+    ];
+    
+    return mentionPatterns.some(pattern => 
+      commentBody.toLowerCase().includes(pattern.toLowerCase())
+    );
+  }
+
+  /**
+   * Generate response using OpenCode LLM
+   */
+  private async generateOpenCodeResponse(
+    comment: string, 
+    issueTitle: string, 
+    issueIdentifier: string
+  ): Promise<string> {
+    try {
+      console.log(`🤖 Generating OpenCode response for issue ${issueIdentifier}`);
+      
+      const response = await openCodeClient.generateLinearResponse(
+        comment,
+        issueTitle,
+        issueIdentifier
+      );
+
+      console.log(`✅ OpenCode response generated for issue ${issueIdentifier}`);
+      return response;
+
+    } catch (error) {
+      console.error('❌ Failed to generate OpenCode response:', error);
+      return `Hi! 👋 I'm the ${this.agentName}. I see you mentioned me, but I'm having trouble connecting to my AI services right now. I'm here to help with development tasks - could you try again in a few moments?`;
+    }
+  }
+
+  /**
+   * Handle incoming webhook events
+   */
+  private async handleWebhook(req: express.Request, res: express.Response): Promise<void> {
+    try {
+      const event = req.body;
+      
+      // Debug: Log full webhook payload structure
+      console.log('🔍 Full webhook payload:', JSON.stringify(event, null, 2));
+      
+      // Validate webhook payload structure
+      if (!event) {
+        console.error('❌ No webhook payload received');
+        res.status(400).json({ error: 'No payload received' });
+        return;
+      }
+
+      console.log(`📥 Webhook event details:`, {
+        action: event.action,
+        type: event.type,
+        hasData: !!event.data,
+        dataType: event.data?.type,
+        url: event.url
+      });
+
+      // Only handle Comment events (type is at root level, not in data)
+      if (event.type !== 'Comment') {
+        console.log(`⏭️  Skipping non-Comment event: ${event.type}`);
+        res.json({ received: true });
+        return;
+      }
+
+      // Check if event.data exists and has required fields
+      if (!event.data || typeof event.data !== 'object') {
+        console.log('⏭️  No event.data object, skipping');
+        res.json({ received: true });
+        return;
+      }
+
+      const commentData = event.data as unknown as CommentData;
+      
+      // Validate comment data structure
+      if (!commentData.id) {
+        console.error('❌ Comment data missing required id field');
+        res.status(400).json({ error: 'Invalid comment data' });
+        return;
+      }
+
+      console.log(`📝 Processing comment ${commentData.id}:`, {
+        hasBody: !!commentData.body,
+        hasUser: !!commentData.user,
+        hasIssue: !!commentData.issue,
+        bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
+      });
+      
+      // Skip if we've already processed this comment
+      if (this.processedComments.has(commentData.id)) {
+        console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
+        res.json({ received: true });
+        return;
+      }
+
+      // Mark as processed to prevent duplicates
+      this.processedComments.add(commentData.id);
+
+      // Skip if comment is from the agent itself
+      if (commentData.user?.id === this.agentUserId) {
+        console.log(`⏭️  Skipping own comment ${commentData.id}`);
+        res.json({ received: true });
+        return;
+      }
+
+      // Check if agent is mentioned
+      if (!commentData.body || !this.isAgentMentioned(commentData.body)) {
+        console.log(`⏭️  Agent not mentioned in comment ${commentData.id}`);
+        res.json({ received: true });
+        return;
+      }
+
+      console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+
+      // Generate and send response
+      const response = await this.generateOpenCodeResponse(
+        commentData.body,
+        commentData.issue.title,
+        commentData.issue.identifier
+      );
+
+      await emitResponse(
+        `webhook-${commentData.id}`,
+        response,
+        commentData.issue.id
+      );
+
+      console.log(`✅ Response sent for comment ${commentData.id}`);
+      res.json({ received: true, responded: true });
+
+    } catch (error) {
+      console.error('❌ Webhook handling error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Start the webhook server
+   */
+  async start(): Promise<void> {
+    const port = parseInt(process.env.LINEAR_WEBHOOK_PORT || '3000');
+
+    // Initialize Linear client first
+    if (!await this.initializeLinearClient()) {
+      console.error('❌ Failed to initialize Linear client. Exiting.');
+      process.exit(1);
+    }
+
+    this.app.listen(port, () => {
+      console.log(`🚀 Linear Agent webhook server running on port ${port}`);
+      console.log(`📋 Agent Configuration:`);
+      console.log(`   - Name: ${this.agentName}`);
+      console.log(`   - User ID: ${this.agentUserId}`);
+      console.log(`   - Webhook URL: ${process.env.LINEAR_AGENT_PUBLIC_URL}/webhooks/linear-agent`);
+      console.log(`   - Health Check: http://localhost:${port}/health`);
+    });
+  }
+}
+
+// Start the server if this file is run directly
+if (require.main === module) {
+  const server = new LinearAgentWebhookServer();
+  server.start().catch(error => {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
   });
-});
+}
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🤖 Linear Agent webhook server running on port ${PORT}`);
-  console.log(`📡 Webhook endpoint: http://localhost:${PORT}/webhooks/linear-agent`);
-  console.log(`🔐 Health check: http://localhost:${PORT}/health`);
-});
-
-export default app;
+export default LinearAgentWebhookServer;

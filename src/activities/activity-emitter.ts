@@ -25,13 +25,18 @@ interface Activity {
  */
 export async function emitActivity(activity: Activity): Promise<void> {
   try {
+    // Use bot OAuth token for comment creation to avoid infinite loops
+    const botOAuthToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
     const apiKey = process.env.LINEAR_API_KEY;
-    if (!apiKey) {
-      throw new Error('LINEAR_API_KEY not configured');
+    
+    if (!botOAuthToken && !apiKey) {
+      throw new Error('Neither LINEAR_BOT_OAUTH_TOKEN nor LINEAR_API_KEY configured');
     }
     
+    // Prefer bot OAuth token for comments, fall back to API key
+    const token = botOAuthToken || apiKey;
     const linearClient = new LinearClient({
-      apiKey
+      apiKey: token!
     });
     
     console.log(`📤 Emitting ${activity.type} activity:`, {

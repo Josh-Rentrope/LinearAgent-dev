@@ -1,0 +1,15 @@
+
+> linear-agent@1.0.0 start
+> node -r dotenv/config dist/index.js
+
+🤖 Starting OpenCode Linear Agent...
+✅ OAuth configuration validated
+📋 Agent Configuration:
+- Public URL: https://c7d5b13421c6.ngrok-free.app
+- Webhook Port: 3000
+- Environment: development
+- Log Level: info
+🚀 Linear Agent is ready to receive events!
+🤖 Linear Agent webhook server running on port 3000
+📡 Webhook endpoint: http://localhost:3000/webhooks/linear-agent
+🔐 Health check: http://localhost:3000/health
