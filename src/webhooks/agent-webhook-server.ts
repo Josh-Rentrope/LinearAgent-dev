@@ -12,6 +12,7 @@ import { LinearClient } from '@linear/sdk';
 import { linearWebhookMiddleware } from '../security/signature-verification';
 import { emitResponse } from '../activities/activity-emitter';
 import { openCodeClient } from '../integrations/opencode-client';
+import OpenCodeSessionManager, { SessionContext } from '../sessions/opencode-session-manager';
 
 
 
@@ -35,10 +36,12 @@ class LinearAgentWebhookServer {
   private agentUserId: string | null = null;
   private agentName: string;
   private processedComments = new Set<string>();
+  private sessionManager: OpenCodeSessionManager;
   
   constructor() {
     this.app = express();
     this.agentName = process.env.LINEAR_AGENT_NAME || 'OpenCode Agent';
+    this.sessionManager = new OpenCodeSessionManager();
     this.setupMiddleware();
     this.setupRoutes();
   }
@@ -115,6 +118,61 @@ class LinearAgentWebhookServer {
   }
 
   /**
+   * Check if comment should trigger a session (complex request)
+   */
+  private shouldCreateSession(commentBody: string): boolean {
+    const sessionTriggers = [
+      'help me',
+      'can you help',
+      'i need help',
+      'assist me',
+      'work on',
+      'implement',
+      'create',
+      'build',
+      'develop',
+      'debug',
+      'fix',
+      'analyze',
+      'review',
+      'session',
+      'start a session',
+      'let\'s work',
+      'let us work'
+    ];
+
+    const lowerBody = commentBody.toLowerCase();
+    return sessionTriggers.some(trigger => lowerBody.includes(trigger)) ||
+           lowerBody.length > 200; // Long comments likely need sessions
+  }
+
+  /**
+   * Extract session context from comment data
+   */
+  private extractSessionContext(commentData: CommentData): SessionContext | null {
+    try {
+      if (!commentData.issue || !commentData.user) {
+        return null;
+      }
+
+      return {
+        issueId: commentData.issue.id,
+        issueTitle: commentData.issue.title,
+        issueDescription: '', // Would need additional API call to get description
+        userId: commentData.user.id,
+        userName: commentData.user.name,
+        teamId: '', // Would need additional API call to get team ID
+        commentId: commentData.id,
+        mentionText: commentData.body,
+        createdAt: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('❌ Error extracting session context:', error);
+      return null;
+    }
+  }
+
+  /**
    * Generate response using OpenCode LLM
    */
   private async generateOpenCodeResponse(
@@ -137,6 +195,121 @@ class LinearAgentWebhookServer {
     } catch (error) {
       console.error('❌ Failed to generate OpenCode response:', error);
       return `Hi! 👋 I'm the ${this.agentName}. I see you mentioned me, but I'm having trouble connecting to my AI services right now. I'm here to help with development tasks - could you try again in a few moments?`;
+    }
+  }
+
+  /**
+   * Handle session-based response
+   */
+  private async handleSessionResponse(
+    sessionContext: SessionContext,
+    commentBody: string
+  ): Promise<string> {
+    try {
+      console.log(`🔄 Handling session response for issue ${sessionContext.issueId}`);
+
+      // Check if session already exists
+      let session = this.sessionManager.getSessionByIssue(
+        sessionContext.issueId,
+        sessionContext.userId
+      );
+
+      if (!session) {
+        // Create new session
+        console.log(`🆕 Creating new session for issue ${sessionContext.issueId}`);
+        session = await this.sessionManager.createSession(sessionContext, {
+          timeoutMinutes: 30,
+          maxMessages: 50
+        });
+
+        // Create OpenCode session if available
+        if (openCodeClient.isSessionEnabled()) {
+          try {
+            const opencodeSession = await openCodeClient.createSession(
+              sessionContext,
+              commentBody
+            );
+            
+            this.sessionManager.linkOpenCodeSession(
+              session.id,
+              opencodeSession.sessionId
+            );
+            
+            this.sessionManager.updateSessionStatus(session.id, 'active');
+            
+            return `🚀 **Session Started!** I've created a dedicated session to help you with this issue. I'll maintain context across our conversation and provide more detailed assistance.
+
+**Session Details:**
+- Issue: ${sessionContext.issueTitle}
+- Session ID: ${session.id}
+- Status: Active
+
+I'm ready to help! What would you like to work on? 🛠️`;
+
+          } catch (sessionError) {
+            console.error('❌ Failed to create OpenCode session:', sessionError);
+            this.sessionManager.updateSessionStatus(session.id, 'error');
+            
+            // Fall back to regular response
+            return await this.generateOpenCodeResponse(
+              commentBody,
+              sessionContext.issueTitle,
+              sessionContext.issueId
+            );
+          }
+        } else {
+          // Session API not available, use regular response
+          return await this.generateOpenCodeResponse(
+            commentBody,
+            sessionContext.issueTitle,
+            sessionContext.issueId
+          );
+        }
+      } else {
+        // Existing session found
+        console.log(`📋 Using existing session ${session.id}`);
+        
+        if (session.status === 'active' && session.opencodeSessionId) {
+          // Add user message to session
+          this.sessionManager.addMessage(
+            session.id,
+            'user',
+            commentBody,
+            { linearCommentId: sessionContext.commentId }
+          );
+
+          // Generate response using session
+          const response = await openCodeClient.generateSessionResponse(
+            session,
+            commentBody
+          );
+
+          // Add assistant response to session
+          this.sessionManager.addMessage(
+            session.id,
+            'assistant',
+            response,
+            { opencodeMessageId: 'generated' }
+          );
+
+          return response;
+        } else {
+          // Session not active, fall back to regular response
+          return await this.generateOpenCodeResponse(
+            commentBody,
+            sessionContext.issueTitle,
+            sessionContext.issueId
+          );
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Session response handling failed:', error);
+      return await this.generateOpenCodeResponse(
+        commentBody,
+        sessionContext.issueTitle,
+        sessionContext.issueId
+      );
     }
   }
 
@@ -221,12 +394,32 @@ class LinearAgentWebhookServer {
 
       console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
 
-      // Generate and send response
-      const response = await this.generateOpenCodeResponse(
-        commentData.body,
-        commentData.issue.title,
-        commentData.issue.identifier
-      );
+      // Determine if we should create a session
+      const shouldCreateSession = this.shouldCreateSession(commentData.body);
+      let response: string;
+
+      if (shouldCreateSession) {
+        console.log(`🔄 Creating session for complex request in comment ${commentData.id}`);
+        
+        const sessionContext = this.extractSessionContext(commentData);
+        if (sessionContext) {
+          response = await this.handleSessionResponse(sessionContext, commentData.body);
+        } else {
+          // Fall back to regular response if context extraction fails
+          response = await this.generateOpenCodeResponse(
+            commentData.body,
+            commentData.issue.title,
+            commentData.issue.identifier
+          );
+        }
+      } else {
+        // Simple request, use regular response
+        response = await this.generateOpenCodeResponse(
+          commentData.body,
+          commentData.issue.title,
+          commentData.issue.identifier
+        );
+      }
 
       await emitResponse(
         `webhook-${commentData.id}`,
@@ -235,7 +428,7 @@ class LinearAgentWebhookServer {
       );
 
       console.log(`✅ Response sent for comment ${commentData.id}`);
-      res.json({ received: true, responded: true });
+      res.json({ received: true, responded: true, sessionCreated: shouldCreateSession });
 
     } catch (error) {
       console.error('❌ Webhook handling error:', error);
@@ -262,6 +455,9 @@ class LinearAgentWebhookServer {
       console.log(`   - User ID: ${this.agentUserId}`);
       console.log(`   - Webhook URL: ${process.env.LINEAR_AGENT_PUBLIC_URL}/webhooks/linear-agent`);
       console.log(`   - Health Check: http://localhost:${port}/health`);
+      console.log(`🔧 Session Features:`);
+      console.log(`   - Session Manager: ${this.sessionManager ? 'Enabled' : 'Disabled'}`);
+      console.log(`   - OpenCode Sessions: ${openCodeClient.isSessionEnabled() ? 'Enabled' : 'Disabled'}`);
     });
   }
 }
