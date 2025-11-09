@@ -270,26 +270,10 @@ I'm ready to help! What would you like to work on? 🛠️`;
         console.log(`📋 Using existing session ${session.id}`);
         
         if (session.status === 'active' && session.opencodeSessionId) {
-          // Add user message to session
-          this.sessionManager.addMessage(
-            session.id,
-            'user',
-            commentBody,
-            { linearCommentId: sessionContext.commentId }
-          );
-
-          // Generate response using session
+          // Generate response using session (opencode serve handles message storage)
           const response = await openCodeClient.generateSessionResponse(
             session,
             commentBody
-          );
-
-          // Add assistant response to session
-          this.sessionManager.addMessage(
-            session.id,
-            'assistant',
-            response,
-            { opencodeMessageId: 'generated' }
           );
 
           return response;

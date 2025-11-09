@@ -1,5 +1,10 @@
 import { LinearWebhookPayload } from '../webhooks/agent-webhook-server'
 
+/**
+ * Session context for Linear webhook events
+ * @author Joshua Rentrope <joshua@opencode.ai>
+ * @issue JOS-145
+ */
 export interface SessionContext {
   issueId: string
   issueTitle: string
@@ -12,31 +17,18 @@ export interface SessionContext {
   createdAt: string
 }
 
+/**
+ * Simplified session interface that maps to opencode serve sessions
+ * @author Joshua Rentrope <joshua@opencode.ai>
+ * @issue JOS-145
+ */
 export interface OpenCodeSession {
   id: string
   linearContext: SessionContext
   opencodeSessionId?: string
   status: 'creating' | 'active' | 'completed' | 'error' | 'timeout'
   createdAt: string
-  updatedAt: string
   lastActivity: string
-  messages: SessionMessage[]
-  metadata: {
-    timeoutMinutes: number
-    maxMessages: number
-    currentMessages: number
-  }
-}
-
-export interface SessionMessage {
-  id: string
-  type: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: string
-  metadata?: {
-    linearCommentId?: string
-    opencodeMessageId?: string
-  }
 }
 
 export interface SessionCreateOptions {
@@ -45,6 +37,11 @@ export interface SessionCreateOptions {
   initialContext?: string
 }
 
+/**
+ * Simplified session manager that relies on opencode serve for storage
+ * @author Joshua Rentrope <joshua@opencode.ai>
+ * @issue JOS-145
+ */
 export class OpenCodeSessionManager {
   private sessions = new Map<string, OpenCodeSession>()
   private cleanupInterval: NodeJS.Timeout | null = null
@@ -55,6 +52,9 @@ export class OpenCodeSessionManager {
 
   /**
    * Create a new OpenCode session from Linear webhook context
+   * Simplified to rely on opencode serve for message storage
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-145
    */
   async createSession(
     linearContext: SessionContext,
@@ -67,14 +67,7 @@ export class OpenCodeSessionManager {
       linearContext,
       status: 'creating',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      lastActivity: new Date().toISOString(),
-      messages: [],
-      metadata: {
-        timeoutMinutes: options.timeoutMinutes || 30,
-        maxMessages: options.maxMessages || 50,
-        currentMessages: 0
-      }
+      lastActivity: new Date().toISOString()
     }
 
     this.sessions.set(sessionId, session)
@@ -100,70 +93,40 @@ export class OpenCodeSessionManager {
 
   /**
    * Update session status
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-145
    */
   updateSessionStatus(sessionId: string, status: OpenCodeSession['status']): void {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.status = status
-      session.updatedAt = new Date().toISOString()
       session.lastActivity = new Date().toISOString()
       console.log(`📝 Updated session ${sessionId} status to ${status}`)
     }
   }
 
   /**
-   * Add message to session
-   */
-  addMessage(
-    sessionId: string,
-    type: SessionMessage['type'],
-    content: string,
-    metadata?: SessionMessage['metadata']
-  ): void {
-    const session = this.sessions.get(sessionId)
-    if (!session) return
-
-    const message: SessionMessage = {
-      id: this.generateMessageId(),
-      type,
-      content,
-      timestamp: new Date().toISOString(),
-      metadata
-    }
-
-    session.messages.push(message)
-    session.metadata.currentMessages = session.messages.length
-    session.updatedAt = new Date().toISOString()
-    session.lastActivity = new Date().toISOString()
-
-    console.log(`💬 Added ${type} message to session ${sessionId}`)
-  }
-
-  /**
    * Link OpenCode session ID to our session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-145
    */
   linkOpenCodeSession(sessionId: string, opencodeSessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.opencodeSessionId = opencodeSessionId
-      session.updatedAt = new Date().toISOString()
       console.log(`🔗 Linked OpenCode session ${opencodeSessionId} to session ${sessionId}`)
     }
   }
 
   /**
    * Complete session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-145
    */
   completeSession(sessionId: string, reason?: string): void {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.status = 'completed'
-      session.updatedAt = new Date().toISOString()
-      
-      if (reason) {
-        this.addMessage(sessionId, 'system', `Session completed: ${reason}`)
-      }
-      
       console.log(`✅ Completed session ${sessionId}${reason ? ` (${reason})` : ''}`)
     }
   }
@@ -211,14 +174,17 @@ export class OpenCodeSessionManager {
 
   /**
    * Cleanup expired sessions
+   * Simplified timeout handling (default 30 minutes)
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-145
    */
   private cleanupExpiredSessions(): void {
     const now = new Date()
     const expiredSessions: string[] = []
+    const timeoutMs = 30 * 60 * 1000 // 30 minutes default
 
     for (const [sessionId, session] of this.sessions.entries()) {
       const lastActivity = new Date(session.lastActivity)
-      const timeoutMs = session.metadata.timeoutMinutes * 60 * 1000
       
       if (now.getTime() - lastActivity.getTime() > timeoutMs) {
         expiredSessions.push(sessionId)
@@ -229,8 +195,7 @@ export class OpenCodeSessionManager {
       const session = this.sessions.get(sessionId)
       if (session) {
         session.status = 'timeout'
-        this.addMessage(sessionId, 'system', `Session timed out after ${session.metadata.timeoutMinutes} minutes`)
-        console.log(`⏰ Session ${sessionId} timed out`)
+        console.log(`⏰ Session ${sessionId} timed out after 30 minutes`)
       }
     }
   }
@@ -263,14 +228,7 @@ export class OpenCodeSessionManager {
     return `session_${issueId}_${userId}_${timestamp}_${random}`
   }
 
-  /**
-   * Generate unique message ID
-   */
-  private generateMessageId(): string {
-    const timestamp = Date.now()
-    const random = Math.random().toString(36).substring(2, 8)
-    return `msg_${timestamp}_${random}`
-  }
+
 
   /**
    * Extract Linear context from webhook payload
