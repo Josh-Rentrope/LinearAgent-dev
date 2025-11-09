@@ -23,6 +23,8 @@ async function main(): Promise<void> {
   console.log(`- Webhook Port: ${process.env.LINEAR_WEBHOOK_PORT || 3000}`);
   console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`- OpenCode API: ${process.env.OPENCODE_API_BASE_URL || 'https://api.opencode.dev'}`);
+  console.log(`- OpenCode Serve: ${process.env.OPENCODE_SERVE_URL || 'http://127.0.0.1:53998'}`);
+  console.log(`- Sessions Enabled: ${process.env.OPENCODE_SERVE_ENABLED === 'true' ? 'Yes' : 'No'}`);
   
   // Check essential variables
   const botToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
