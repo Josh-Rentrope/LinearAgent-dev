@@ -174,6 +174,3 @@ When making changes to the integration:
 4. Reference issue JOS-145 in commits
 
 ---
-*Author: Joshua Rentrope <joshua@opencode.ai>*  
-*Issue: JOS-145*  
-*Updated: 2025-01-09*

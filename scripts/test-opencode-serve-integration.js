@@ -6,8 +6,7 @@
  * This script tests the LinearAgent's integration with opencode serve
  * to ensure session management works correctly.
  * 
- * @author Joshua Rentrope <joshua@opencode.ai>
- * @issue JOS-145
+
  */
 
 const dotenv = require('dotenv');

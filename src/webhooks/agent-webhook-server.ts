@@ -698,7 +698,7 @@ Need more specific guidance? Just ask what you're working on!`;
 
   /**
    * Update elicitation context based on user message and AI response
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   private updateElicitationFromResponse(sessionId: string, userMessage: string, aiResponse: string): void {

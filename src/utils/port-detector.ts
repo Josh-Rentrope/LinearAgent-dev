@@ -4,7 +4,7 @@
  * Utility to detect the port where opencode serve is running
  * since it may choose a random port if 53998 is occupied.
  * 
- * @author Joshua Rentrope <joshua@opencode.ai>
+
  * @issue JOS-145
  */
 

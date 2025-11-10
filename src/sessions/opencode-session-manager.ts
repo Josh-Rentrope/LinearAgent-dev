@@ -1,6 +1,6 @@
 /**
  * Session context for Linear webhook events
- * @author Joshua Rentrope <joshua@opencode.ai>
+
  * @issue JOS-145
  */
 export interface SessionContext {
@@ -17,7 +17,7 @@ export interface SessionContext {
 
 /**
  * Simplified session interface that maps to opencode serve sessions
- * @author Joshua Rentrope <joshua@opencode.ai>
+
  * @issue JOS-145
  */
 export interface OpenCodeSession {
@@ -50,7 +50,7 @@ export interface ElicitationContext {
 
 /**
  * Simplified session manager that relies on opencode serve for storage
- * @author Joshua Rentrope <joshua@opencode.ai>
+
  * @issue JOS-145
  */
 export class OpenCodeSessionManager {
@@ -64,7 +64,7 @@ export class OpenCodeSessionManager {
   /**
    * Create a new OpenCode session from Linear webhook context
    * Enhanced with elicitation framework support
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145, JOS-150
    */
   async createSession(
@@ -112,7 +112,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Update session status
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   updateSessionStatus(sessionId: string, status: OpenCodeSession['status']): void {
@@ -126,7 +126,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Reactivate a completed or timed-out session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-147
    */
   reactivateSession(sessionId: string): OpenCodeSession | null {
@@ -142,7 +142,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Link OpenCode session ID to our session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   linkOpenCodeSession(sessionId: string, opencodeSessionId: string): void {
@@ -155,7 +155,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Complete session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   completeSession(sessionId: string, reason?: string): void {
@@ -210,7 +210,7 @@ export class OpenCodeSessionManager {
   /**
    * Cleanup expired sessions
    * Simplified timeout handling (default 30 minutes)
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   private cleanupExpiredSessions(): void {
@@ -256,7 +256,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Update elicitation phase for session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   updateElicitationPhase(sessionId: string, phase: ElicitationContext['phase'], context?: string): void {
@@ -275,7 +275,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Add pending question to elicitation context
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   addPendingQuestion(sessionId: string, question: string): void {
@@ -289,7 +289,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Remove answered question from elicitation context
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   removePendingQuestion(sessionId: string, questionIndex: number): void {
@@ -303,7 +303,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Increment message count for session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   incrementMessageCount(sessionId: string): void {
@@ -316,7 +316,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Increment error count for session
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   incrementErrorCount(sessionId: string): void {
@@ -335,7 +335,7 @@ export class OpenCodeSessionManager {
 
   /**
    * Check if session should use elicitation framework
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-150
    */
   shouldUseElicitation(sessionId: string): boolean {
@@ -343,15 +343,100 @@ export class OpenCodeSessionManager {
     return !!(session?.options?.elicitationMode && session.elicitationContext)
   }
 
-  /**
-   * Get elicitation context for session
-   * @author Joshua Rentrope <joshua@opencode.ai>
-   * @issue JOS-150
-   */
-  getElicitationContext(sessionId: string): ElicitationContext | null {
+/**
+    * Get elicitation context for session
+   
+    * @issue JOS-150
+    */
+  getElicitationContext(sessionId: string): ElicitationContext | undefined {
     const session = this.sessions.get(sessionId)
-    return session?.elicitationContext || null
+    return session?.elicitationContext
   }
+
+  /**
+    * Integrate AgentSessionEvent data into session context
+   
+    * @issue JOS-156
+    */
+  integrateAgentSessionEvent(sessionId: string, eventData: {
+    userId: string;
+    issueId: string;
+    eventType: string;
+    elicitationContext?: any;
+  }): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      console.log(`⚠️  Session ${sessionId} not found for AgentSessionEvent integration`)
+      return
+    }
+
+    console.log(`🔄 Integrating AgentSessionEvent into session ${sessionId}:`, {
+      eventType: eventData.eventType,
+      hasElicitationContext: !!eventData.elicitationContext
+    })
+
+    // Update session activity
+    session.lastActivity = new Date().toISOString()
+
+    // Integrate elicitation context if available
+    if (eventData.elicitationContext && session.elicitationContext) {
+      // Merge user intent and confidence
+      if (eventData.elicitationContext.userIntent) {
+        session.elicitationContext.contextGathered.push(
+          `User intent detected: ${eventData.elicitationContext.userIntent}`
+        )
+      }
+
+      // Add confidence score if available
+      if (eventData.elicitationContext.confidence) {
+        session.elicitationContext.contextGathered.push(
+          `Intent confidence: ${Math.round(eventData.elicitationContext.confidence * 100)}%`
+        )
+      }
+
+      // Add pending questions from event
+      if (eventData.elicitationContext.pendingQuestions) {
+        eventData.elicitationContext.pendingQuestions.forEach(question => {
+          this.addPendingQuestion(sessionId, question)
+        })
+      }
+
+      // Update elicitation phase based on event type
+      this.updateElicitationPhaseFromEvent(sessionId, eventData.eventType)
+    }
+
+    console.log(`✅ AgentSessionEvent integrated into session ${sessionId}`)
+  }
+
+  /**
+    * Update elicitation phase based on AgentSessionEvent type
+   
+    * @issue JOS-156
+    */
+  private updateElicitationPhaseFromEvent(sessionId: string, eventType: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.elicitationContext) return
+
+    let newPhase: ElicitationContext['phase'] = 'initial'
+
+    switch (eventType) {
+      case 'issueCommentMention':
+        newPhase = 'clarification'
+        break
+      case 'sessionStarted':
+        newPhase = 'initial'
+        break
+      case 'sessionEnded':
+        newPhase = 'completed'
+        break
+      default:
+        console.log(`⚠️  Unknown AgentSessionEvent type: ${eventType}`)
+        return
+    }
+
+    this.updateElicitationPhase(sessionId, newPhase, `Event: ${eventType}`)
+  }
+}
 
   /**
    * Generate unique session ID

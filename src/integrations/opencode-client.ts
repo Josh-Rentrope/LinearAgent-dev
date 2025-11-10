@@ -5,8 +5,7 @@
  * intelligent responses for Linear agent interactions.
  * Now uses native opencode serve session management for better reliability.
  * 
- * @author Joshua Rentrope <joshua@opencode.ai>
- * @issue JOS-145
+
  */
 
 import { OpenCodeSession, SessionContext } from '../sessions/opencode-session-manager';
@@ -263,7 +262,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Create a new OpenCode session using opencode serve API
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   async createSession(
@@ -320,7 +319,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
   /**
    * Send a message to an OpenCode session using opencode serve API
    * Enhanced with timeout handling and progress reporting for elicitations framework
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145, JOS-150
    */
   async sendSessionMessage(
@@ -420,7 +419,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Get session status and details using opencode serve API
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   async getSessionStatus(sessionId: string): Promise<OpenCodeSessionResponse> {
@@ -454,7 +453,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Complete an OpenCode session using opencode serve API
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   async completeSession(sessionId: string, _reason?: string): Promise<void> {
@@ -492,7 +491,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
   /**
    * Generate a response using session context
    * Enhanced with timeout handling for elicitations framework
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145, JOS-150
    */
   async generateSessionResponse(
@@ -543,7 +542,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Check if session features are available
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   isSessionEnabled(): boolean {
@@ -577,7 +576,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Check if opencode serve API is available
-   * @author Joshua Rentrope <joshua@opencode.ai>
+  
    * @issue JOS-145
    */
   async isSessionHealthy(): Promise<boolean> {
