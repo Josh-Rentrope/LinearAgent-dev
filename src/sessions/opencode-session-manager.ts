@@ -27,12 +27,25 @@ export interface OpenCodeSession {
   status: 'creating' | 'active' | 'completed' | 'error' | 'timeout'
   createdAt: string
   lastActivity: string
+  options?: SessionCreateOptions
+  elicitationContext?: ElicitationContext | undefined
+  messageCount?: number
+  errorCount?: number
 }
 
 export interface SessionCreateOptions {
   timeoutMinutes?: number
   maxMessages?: number
   initialContext?: string
+  elicitationMode?: boolean
+  priority?: 'low' | 'medium' | 'high'
+}
+
+export interface ElicitationContext {
+  phase: 'initial' | 'clarification' | 'planning' | 'implementation' | 'review' | 'completed'
+  lastElicitation?: string
+  pendingQuestions: string[]
+  contextGathered: string[]
 }
 
 /**
@@ -50,13 +63,13 @@ export class OpenCodeSessionManager {
 
   /**
    * Create a new OpenCode session from Linear webhook context
-   * Simplified to rely on opencode serve for message storage
+   * Enhanced with elicitation framework support
    * @author Joshua Rentrope <joshua@opencode.ai>
-   * @issue JOS-145
+   * @issue JOS-145, JOS-150
    */
   async createSession(
     linearContext: SessionContext,
-    _options: SessionCreateOptions = {}
+    options: SessionCreateOptions = {}
   ): Promise<OpenCodeSession> {
     const sessionId = this.generateSessionId(linearContext.issueId, linearContext.userId)
     
@@ -65,11 +78,19 @@ export class OpenCodeSessionManager {
       linearContext,
       status: 'creating',
       createdAt: new Date().toISOString(),
-      lastActivity: new Date().toISOString()
+      lastActivity: new Date().toISOString(),
+      options,
+      messageCount: 0,
+      errorCount: 0,
+      elicitationContext: options.elicitationMode ? {
+        phase: 'initial',
+        pendingQuestions: [],
+        contextGathered: []
+      } : undefined
     }
 
     this.sessions.set(sessionId, session)
-    console.log(`✅ Created session ${sessionId} for issue ${linearContext.issueId}`)
+    console.log(`✅ Created session ${sessionId} for issue ${linearContext.issueId}${options.elicitationMode ? ' (elicitation mode)' : ''}`)
     
     return session
   }
@@ -234,6 +255,105 @@ export class OpenCodeSessionManager {
   }
 
   /**
+   * Update elicitation phase for session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  updateElicitationPhase(sessionId: string, phase: ElicitationContext['phase'], context?: string): void {
+    const session = this.sessions.get(sessionId)
+    if (session && session.elicitationContext) {
+      session.elicitationContext.phase = phase
+      session.lastActivity = new Date().toISOString()
+      
+      if (context) {
+        session.elicitationContext.contextGathered.push(context)
+      }
+      
+      console.log(`🔄 Updated session ${sessionId} elicitation phase to ${phase}`)
+    }
+  }
+
+  /**
+   * Add pending question to elicitation context
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  addPendingQuestion(sessionId: string, question: string): void {
+    const session = this.sessions.get(sessionId)
+    if (session && session.elicitationContext) {
+      session.elicitationContext.pendingQuestions.push(question)
+      session.lastActivity = new Date().toISOString()
+      console.log(`❓ Added pending question to session ${sessionId}: ${question.substring(0, 50)}...`)
+    }
+  }
+
+  /**
+   * Remove answered question from elicitation context
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  removePendingQuestion(sessionId: string, questionIndex: number): void {
+    const session = this.sessions.get(sessionId)
+    if (session && session.elicitationContext && session.elicitationContext.pendingQuestions[questionIndex]) {
+      const removed = session.elicitationContext.pendingQuestions.splice(questionIndex, 1)[0]
+      session.lastActivity = new Date().toISOString()
+      console.log(`✅ Removed answered question from session ${sessionId}: ${removed.substring(0, 50)}...`)
+    }
+  }
+
+  /**
+   * Increment message count for session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  incrementMessageCount(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      session.messageCount = (session.messageCount || 0) + 1
+      session.lastActivity = new Date().toISOString()
+    }
+  }
+
+  /**
+   * Increment error count for session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  incrementErrorCount(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      session.errorCount = (session.errorCount || 0) + 1
+      session.lastActivity = new Date().toISOString()
+      
+      // If too many errors, mark session as error
+      if (session.errorCount >= 3) {
+        session.status = 'error'
+        console.log(`❌ Session ${sessionId} marked as error after ${session.errorCount} errors`)
+      }
+    }
+  }
+
+  /**
+   * Check if session should use elicitation framework
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  shouldUseElicitation(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    return !!(session?.options?.elicitationMode && session.elicitationContext)
+  }
+
+  /**
+   * Get elicitation context for session
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  getElicitationContext(sessionId: string): ElicitationContext | null {
+    const session = this.sessions.get(sessionId)
+    return session?.elicitationContext || null
+  }
+
+  /**
    * Generate unique session ID
    */
   private generateSessionId(issueId: string, userId: string): string {
@@ -241,10 +361,6 @@ export class OpenCodeSessionManager {
     const random = Math.random().toString(36).substring(2, 8)
     return `session_${issueId}_${userId}_${timestamp}_${random}`
   }
-
-
-
-
 }
 
 export default OpenCodeSessionManager

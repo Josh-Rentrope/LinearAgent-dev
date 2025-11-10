@@ -64,6 +64,16 @@ export class OpenCodeClient {
   private baseUrl: string;
   private opencodeServeUrl: string | null = null;
   private opencodeServeEnabled: boolean;
+  private maxRetries: number = 3;
+  private retryDelay: number = 1000; // 1 second base delay
+  
+  // Timeout configurations
+  private readonly TIMEOUTS = {
+    API_REQUEST: 30000,      // 30 seconds for regular API calls
+    SESSION_CREATION: 20000,  // 20 seconds for session creation
+    SESSION_MESSAGE: 45000,   // 45 seconds for session messages
+    HEALTH_CHECK: 5000        // 5 seconds for health checks
+  } as const;
 
   constructor() {
     this.apiKey = process.env.OPENCODE_API_KEY || '';
@@ -82,6 +92,49 @@ export class OpenCodeClient {
       console.log('📝 OpenCode Serve integration disabled, using fallback responses');
     }
   }
+
+  /**
+   * Helper method for retry logic with exponential backoff
+   */
+  private async retryWithBackoff<T>(
+    operation: () => Promise<T>,
+    operationName: string,
+    maxRetries: number = this.maxRetries
+  ): Promise<T> {
+    let lastError: Error;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Don't retry on certain error types
+        if (lastError.message.includes('401') || 
+            lastError.message.includes('403') || 
+            lastError.message.includes('Unauthorized') ||
+            lastError.message.includes('Forbidden')) {
+          throw lastError;
+        }
+        
+        if (attempt === maxRetries) {
+          console.error(`❌ ${operationName} failed after ${maxRetries + 1} attempts:`, lastError);
+          throw lastError;
+        }
+        
+        const delay = this.retryDelay * Math.pow(2, attempt);
+        console.warn(`⚠️  ${operationName} attempt ${attempt + 1} failed, retrying in ${delay}ms:`, lastError.message);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw lastError!;
+  }
+
+
+
+
 
   /**
    * Get the current opencode serve URL, detecting port if needed
@@ -109,7 +162,7 @@ export class OpenCodeClient {
       return this.getFallbackResponse(prompt);
     }
 
-    try {
+    const operation = async () => {
       console.log('🤖 Generating OpenCode response...');
       
       const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
@@ -136,7 +189,8 @@ export class OpenCodeClient {
           top_p: 0.9,
           frequency_penalty: 0.5,
           presence_penalty: 0.5
-        })
+        }),
+        signal: AbortSignal.timeout(this.TIMEOUTS.API_REQUEST)
       });
 
       if (!response.ok) {
@@ -153,9 +207,12 @@ export class OpenCodeClient {
 
       console.log('✅ OpenCode response generated successfully');
       return content.trim();
+    };
 
+    try {
+      return await this.retryWithBackoff(operation, 'OpenCode API response generation');
     } catch (error) {
-      console.error('❌ OpenCode API error:', error);
+      console.error('❌ OpenCode API error after retries:', error);
       return this.getFallbackResponse(prompt);
     }
   }
@@ -217,7 +274,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       throw new Error('OpenCode Serve integration is not enabled');
     }
 
-    try {
+    const operation = async () => {
       console.log('🔗 Creating OpenCode session via opencode serve...');
       
       const serveUrl = await this.getOpenCodeServeUrl();
@@ -232,7 +289,8 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
           'Content-Type': 'application/json',
           'User-Agent': 'Linear-Agent/1.0'
         },
-        body: JSON.stringify(sessionData)
+        body: JSON.stringify(sessionData),
+        signal: AbortSignal.timeout(this.TIMEOUTS.SESSION_CREATION)
       });
 
       if (!response.ok) {
@@ -249,9 +307,12 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       }
 
       return data;
+    };
 
+    try {
+      return await this.retryWithBackoff(operation, 'OpenCode session creation', 2); // Fewer retries for session creation
     } catch (error) {
-      console.error('❌ OpenCode session creation failed:', error);
+      console.error('❌ OpenCode session creation failed after retries:', error);
       throw error;
     }
   }
@@ -272,7 +333,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       throw new Error('OpenCode Serve integration is not enabled');
     }
 
-    try {
+    const operation = async () => {
       console.log(`💬 Sending message to OpenCode session ${sessionId}...`);
       
       if (statusCallback) {
@@ -302,7 +363,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
           statusCallback('Timeout', 'Request is taking too long. Please try with a simpler request.');
         }
         controller.abort();
-      }, 45000); // 45 second timeout - less than Linear's typical 60s timeout
+      }, this.TIMEOUTS.SESSION_MESSAGE); // Configurable timeout for session messages
 
       if (statusCallback) {
         statusCallback('Processing', 'AI is analyzing your request and generating a response...');
@@ -341,12 +402,15 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
       console.log(`✅ Message sent to session ${sessionId}`);
       return content.trim();
+    };
 
+    try {
+      return await this.retryWithBackoff(operation, `Session message to ${sessionId}`, 2); // Fewer retries for messages
     } catch (error) {
-      console.error(`❌ Failed to send message to session ${sessionId}:`, error);
+      console.error(`❌ Failed to send message to session ${sessionId} after retries:`, error);
       
       // Handle timeout specifically for elicitations framework
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('timeout'))) {
         throw new Error(`Session response timeout - OpenCode took too long to respond. Please try again with a simpler request.`);
       }
       
@@ -501,7 +565,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
           'Authorization': `Bearer ${this.apiKey}`,
           'User-Agent': 'Linear-Agent/1.0'
         },
-        signal: AbortSignal.timeout(5000) // 5 second timeout
+        signal: AbortSignal.timeout(this.TIMEOUTS.HEALTH_CHECK)
       });
 
       return response.ok;
@@ -530,7 +594,7 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
           'Authorization': `Bearer ${this.apiKey}`,
           'User-Agent': 'Linear-Agent/1.0'
         },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(this.TIMEOUTS.HEALTH_CHECK)
       });
 
       return response.ok;

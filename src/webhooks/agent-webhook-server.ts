@@ -20,6 +20,7 @@ import { todoManager } from '../todos/todo-manager';
 interface CommentData {
   id: string;
   body: string;
+  parentId?: string;
   issue: {
     id: string;
     identifier: string;
@@ -116,6 +117,36 @@ class LinearAgentWebhookServer {
     return mentionPatterns.some(pattern => 
       commentBody.toLowerCase().includes(pattern.toLowerCase())
     );
+  }
+
+  /**
+   * Check if comment is a reply to an agent comment (threaded reply)
+   * This allows agents to respond to replies without requiring new @mentions
+   */
+  private isReplyToAgent(commentData: CommentData): boolean {
+    // Check if comment has a parent (is a reply in a thread)
+    if (!commentData.parentId) {
+      return false;
+    }
+
+    // Check if there's an active session for this user and issue
+    // If there's an active session, any reply in the thread should be handled
+    const userSessions = Array.from(this.sessionManager.sessions.values())
+      .filter(session => session.linearContext.userId === commentData.user.id)
+      .filter(session => session.linearContext.issueId === commentData.issue.id)
+      .filter(session => session.status === 'active');
+
+    if (userSessions.length === 0) {
+      return false;
+    }
+
+    // Additional check: verify this is actually a reply in a thread where agent participated
+    // We need to check if the parent comment or any comments in this thread are from the agent
+    // For now, we'll assume that if there's an active session and this is a reply (has parentId),
+    // it's likely a continuation of the conversation
+    console.log(`🔄 Threaded reply detected: comment ${commentData.id} has parent ${commentData.parentId} in active session`);
+    
+    return true;
   }
 
   /**
@@ -287,7 +318,8 @@ Need more specific guidance? Just ask what you're working on!`;
    */
   private async handleSessionResponse(
     sessionContext: SessionContext,
-    commentBody: string
+    commentBody: string,
+    existingSession?: any
   ): Promise<string> {
     try {
       console.log(`🔄 Handling session response for issue ${sessionContext.issueId}`);
@@ -295,8 +327,8 @@ Need more specific guidance? Just ask what you're working on!`;
       // Extract TODOs from the message
       const todoResults = await this.extractAndCreateTodos(commentBody, sessionContext);
       
-      // Check if session already exists
-      let session = this.sessionManager.getSessionByIssue(
+      // Use existing session if provided, otherwise look for one
+      let session = existingSession || this.sessionManager.getSessionByIssue(
         sessionContext.issueId,
         sessionContext.userId
       );
@@ -306,7 +338,9 @@ Need more specific guidance? Just ask what you're working on!`;
         console.log(`🆕 Creating new session for issue ${sessionContext.issueId}`);
         session = await this.sessionManager.createSession(sessionContext, {
           timeoutMinutes: 30,
-          maxMessages: 50
+          maxMessages: 50,
+          elicitationMode: true, // Enable elicitation framework for better interaction
+          priority: 'medium'
         });
 
         // Create OpenCode session if available
@@ -330,9 +364,17 @@ Need more specific guidance? Just ask what you're working on!`;
               commentBody // Send user's message verbatim
             );
             
+            // Update session metrics
+            this.sessionManager.incrementMessageCount(session.id);
+            
             // Add TODO creation results to response if any
             if (todoResults.length > 0) {
               response = `${todoResults.join('\n\n')}\n\n${response}`;
+            }
+            
+            // Update elicitation context if enabled
+            if (this.sessionManager.shouldUseElicitation(session.id)) {
+              this.updateElicitationFromResponse(session.id, commentBody, response);
             }
             
             return response; // Return the actual OpenCode response
@@ -460,14 +502,23 @@ Need more specific guidance? Just ask what you're working on!`;
          return;
        }
 
-       // Check if agent is mentioned
-       if (!commentData.body || !this.isAgentMentioned(commentData.body)) {
-         console.log(`⏭️  Agent not mentioned in comment ${commentData.id}`);
-         res.json({ received: true });
-         return;
-       }
+         // Check if agent is mentioned OR if this is a reply to an agent comment
+         const isMentioned = commentData.body && this.isAgentMentioned(commentData.body);
+         const isReplyToAgent = this.isReplyToAgent(commentData);
+         
+         if (!isMentioned && !isReplyToAgent) {
+           console.log(`⏭️  Agent not mentioned and not a reply to agent in comment ${commentData.id}`);
+           res.json({ received: true });
+           return;
+         }
 
-       console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+         if (isReplyToAgent && !isMentioned) {
+           console.log(`🔄 Processing threaded reply to agent in comment ${commentData.id} (parent: ${commentData.parentId})`);
+         } else if (isMentioned && isReplyToAgent) {
+           console.log(`🎯 Agent mentioned in threaded reply ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+         } else {
+           console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+         }
 
        // Immediately acknowledge webhook to prevent Linear timeout
        // This ensures Linear doesn't close the interaction while we process
@@ -511,28 +562,46 @@ Need more specific guidance? Just ask what you're working on!`;
        const sessionContext = this.extractSessionContext(commentData);
        let response: string;
 
-       if (sessionContext) {
-         // Check if there's an existing relevant session we can reactivate
-         const existingSession = this.findRelevantSession(
-           sessionContext.userId, 
-           sessionContext.issueId
-         );
+        if (sessionContext) {
+         // For threaded replies, prioritize finding active sessions
+         const isReplyToAgent = this.isReplyToAgent(commentData);
+         let existingSession = null;
+
+         if (isReplyToAgent) {
+           // For threaded replies, look for active sessions first
+           existingSession = Array.from(this.sessionManager.sessions.values())
+             .find(session => 
+               session.linearContext.userId === sessionContext.userId &&
+               session.linearContext.issueId === sessionContext.issueId &&
+               session.status === 'active'
+             );
+         }
+
+         if (!existingSession) {
+           // Look for any relevant session (including completed/timeout ones)
+           existingSession = this.findRelevantSession(
+             sessionContext.userId, 
+             sessionContext.issueId
+           );
+         }
 
          if (existingSession) {
-           console.log(`🔄 Found relevant existing session ${existingSession.id}, reactivating`);
+           console.log(`🔄 Found relevant existing session ${existingSession.id} (status: ${existingSession.status}), reactivating`);
            // Reactivate the existing session
            const reactivatedSession = this.sessionManager.reactivateSession(existingSession.id);
            if (reactivatedSession) {
-             response = await this.handleSessionResponse(sessionContext, commentData.body);
+             response = await this.handleSessionResponse(sessionContext, commentData.body, existingSession);
            } else {
+             console.log(`⚠️  Session reactivation failed, creating new session`);
              // Reactivation failed, create new session
              response = await this.handleSessionResponse(sessionContext, commentData.body);
            }
-         } else {
-           // Create new session
-           response = await this.handleSessionResponse(sessionContext, commentData.body);
-         }
-       } else {
+          } else {
+            console.log(`🆕 No existing session found, creating new session`);
+            // Create new session
+            response = await this.handleSessionResponse(sessionContext, commentData.body);
+          }
+        } else {
          // Fall back to regular response if context extraction fails
          response = await this.generateOpenCodeResponse(
            commentData.body,
@@ -568,6 +637,46 @@ Need more specific guidance? Just ask what you're working on!`;
        }
      }
    }
+
+  /**
+   * Update elicitation context based on user message and AI response
+   * @author Joshua Rentrope <joshua@opencode.ai>
+   * @issue JOS-150
+   */
+  private updateElicitationFromResponse(sessionId: string, userMessage: string, aiResponse: string): void {
+    const elicitationContext = this.sessionManager.getElicitationContext(sessionId);
+    if (!elicitationContext) return;
+
+    // Analyze user message for questions or clarification needs
+    const hasQuestions = /[?？]/.test(userMessage);
+    const needsClarification = /(unclear|uncertain|what do you mean|explain|clarify)/i.test(userMessage);
+    
+    if (hasQuestions || needsClarification) {
+      if (elicitationContext.phase === 'initial') {
+        this.sessionManager.updateElicitationPhase(sessionId, 'clarification', `User asked: ${userMessage}`);
+      }
+      
+      // Extract questions from user message
+      const questions = userMessage.split(/[.!?]/).filter(s => s.trim().includes('?')).map(s => s.trim());
+      questions.forEach(q => this.sessionManager.addPendingQuestion(sessionId, q));
+    }
+
+    // Analyze AI response for questions asked to user
+    const aiQuestions = aiResponse.split(/[.!?]/).filter(s => s.trim().includes('?')).map(s => s.trim());
+    if (aiQuestions.length > 0 && elicitationContext.phase === 'initial') {
+      this.sessionManager.updateElicitationPhase(sessionId, 'clarification', `AI asked questions: ${aiQuestions.join('; ')}`);
+    }
+
+    // Check if we're moving to planning phase
+    if (/(plan|implement|create|build|develop)/i.test(userMessage) && elicitationContext.phase === 'clarification') {
+      this.sessionManager.updateElicitationPhase(sessionId, 'planning', `User ready to implement: ${userMessage}`);
+    }
+
+    // Check if we're moving to implementation phase
+    if (/(start|begin|proceed|go ahead)/i.test(userMessage) && elicitationContext.phase === 'planning') {
+      this.sessionManager.updateElicitationPhase(sessionId, 'implementation', `User starting implementation: ${userMessage}`);
+    }
+  }
 
   /**
    * Start the webhook server
