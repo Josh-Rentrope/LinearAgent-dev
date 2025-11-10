@@ -396,7 +396,7 @@ export class OpenCodeSessionManager {
 
       // Add pending questions from event
       if (eventData.elicitationContext.pendingQuestions) {
-        eventData.elicitationContext.pendingQuestions.forEach(question => {
+        eventData.elicitationContext.pendingQuestions.forEach((question :string) => {
           this.addPendingQuestion(sessionId, question)
         })
       }
@@ -436,7 +436,7 @@ export class OpenCodeSessionManager {
 
     this.updateElicitationPhase(sessionId, newPhase, `Event: ${eventType}`)
   }
-}
+
 
   /**
    * Generate unique session ID

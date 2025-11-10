@@ -218,11 +218,7 @@ Need more specific guidance? Just ask what you're working on!`;
 
     return inactiveSession || null;
   }
-    }
-
-    // Return the most recent inactive session
-    return userSessions[0] || null;
-  }
+  
 
   /**
    * Extract session context from comment data
@@ -644,7 +640,8 @@ Need more specific guidance? Just ask what you're working on!`;
        }
 
        // Find existing session using consolidated logic
-       const existingSession = this.findExistingSession(sessionContext);
+       //TODO: Definitely look at cleaning this up
+       let existingSession = this.findExistingSession(sessionContext);
        
        let response: string;
        if (existingSession) {
@@ -677,11 +674,8 @@ Need more specific guidance? Just ask what you're working on!`;
            commentData.issue.id,
            commentData.id
          );
-       } catch (emitError) {
-         console.error('❌ Failed to send error response:', emitError);
-       }
-     }
-   }
+       
+   
 
        // Default to creating sessions for all other mentions
        console.log(`🔄 Creating session for mention in comment ${commentData.id}`);
@@ -691,7 +685,7 @@ Need more specific guidance? Just ask what you're working on!`;
 
         if (sessionContext) {
         // Find existing session using consolidated logic
-          const existingSession = this.findExistingSession(sessionContext);
+          let existingSession = this.findExistingSession(sessionContext);
           
           if (existingSession) {
             console.log(`🔄 Found existing session ${existingSession.id} (status: ${existingSession.status}), reactivating`);
@@ -703,9 +697,8 @@ Need more specific guidance? Just ask what you're working on!`;
 
          if (!existingSession) {
            // Look for any relevant session (including completed/timeout ones)
-           existingSession = this.findRelevantSession(
-             sessionContext.userId, 
-             sessionContext.issueId
+           existingSession = this.findExistingSession(
+             {...sessionContext}
            );
          }
 
@@ -745,7 +738,7 @@ Need more specific guidance? Just ask what you're working on!`;
 
      } catch (error) {
        console.error('❌ Agent response processing failed:', error);
-       
+     }
        // Try to send error response to Linear
        try {
          const errorResponse = `❌ Sorry, I encountered an error while processing your request: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`;
@@ -775,7 +768,7 @@ Need more specific guidance? Just ask what you're working on!`;
        const issueId = notification.comment.issueId;
 
        // Find existing session for this user/issue pair
-       const existingSession = this.findExistingSession({
+       let existingSession = this.findExistingSession({
          userId,
          issueId,
          issueTitle: '',
