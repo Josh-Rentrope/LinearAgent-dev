@@ -14,23 +14,12 @@ import { emitResponse } from '../activities/activity-emitter';
 import { openCodeClient } from '../integrations/opencode-client';
 import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sessions/opencode-session-manager';
 import { todoManager } from '../todos/todo-manager';
+import { handleAgentSessionEvent, AgentSessionEvent } from './handlers/agent-session-handler';
+import { handleCommentEvent, CommentEvent, CommentData } from './handlers/comment-handler';
 
 
 
-interface CommentData {
-  id: string;
-  body: string;
-  parentId?: string;
-  issue: {
-    id: string;
-    identifier: string;
-    title: string;
-  };
-  user: {
-    id: string;
-    name: string;
-  };
-}
+// CommentData interface is now imported from handlers/comment-handler.ts
 
 class LinearAgentWebhookServer {
   private app: express.Application;
@@ -430,6 +419,133 @@ Need more specific guidance? Just ask what you're working on!`;
     }
   }
 
+/**
+   * Handle Comment webhook events
+   */
+  private async handleCommentWebhook(event: any, res: express.Response): Promise<void> {
+    try {
+      // Check if event.data exists and has required fields
+      if (!event.data || typeof event.data !== 'object') {
+        console.log('⏭️  No event.data object, skipping');
+        res.json({ received: true });
+        return;
+      }
+
+      const commentData = event.data as unknown as CommentData;
+      
+      // Validate comment data structure
+      if (!commentData.id) {
+        console.error('❌ Comment data missing required id field');
+        res.status(400).json({ error: 'Invalid comment data' });
+        return;
+      }
+
+      console.log(`📝 Processing comment ${commentData.id}:`, {
+        hasBody: !!commentData.body,
+        hasUser: !!commentData.user,
+        hasIssue: !!commentData.issue,
+        bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
+      });
+      
+      // Skip if we've already processed this comment
+      if (this.processedComments.has(commentData.id)) {
+        console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
+        res.json({ received: true });
+        return;
+      }
+
+      // Mark as processed to prevent duplicates
+      this.processedComments.add(commentData.id);
+
+      // Create CommentEvent object
+      const commentEvent: CommentEvent = {
+        type: 'Comment',
+        action: event.action || 'create',
+        data: commentData,
+        webhookId: event.webhookId
+      };
+
+      // Route to comment handler
+      if (this.linearClient && this.agentUserId) {
+        await handleCommentEvent(commentEvent, this.linearClient, this.agentUserId, this.agentName);
+      }
+
+      // Continue with existing comment processing logic
+      await this.processCommentEvent(commentData, res);
+
+    } catch (error) {
+      console.error('❌ Comment webhook handling error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Handle AgentSession webhook events
+   */
+  private async handleAgentSessionWebhook(event: any, res: express.Response): Promise<void> {
+    try {
+      console.log(`🔄 Processing AgentSession event: ${event.type}`);
+
+      // Create AgentSessionEvent object
+      const agentSessionEvent: AgentSessionEvent = {
+        type: 'AppUserNotification',
+        appUserId: event.appUserId,
+        notification: event.notification,
+        webhookId: event.webhookId
+      };
+
+      // Route to agent session handler
+      if (this.linearClient) {
+        await handleAgentSessionEvent(agentSessionEvent, this.linearClient);
+      }
+
+      console.log(`✅ AgentSession event processed successfully`);
+      res.json({ received: true });
+
+    } catch (error) {
+      console.error('❌ AgentSession webhook handling error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Process comment event with existing logic
+   */
+  private async processCommentEvent(commentData: CommentData, res: express.Response): Promise<void> {
+    // Skip if comment is from the agent itself
+    if (commentData.user?.id === this.agentUserId) {
+      console.log(`⏭️  Skipping own comment ${commentData.id}`);
+      res.json({ received: true });
+      return;
+    }
+
+    // Check if agent is mentioned OR if this is a reply to an agent comment
+    const isMentioned = commentData.body && this.isAgentMentioned(commentData.body);
+    const isReplyToAgent = this.isReplyToAgent(commentData);
+    
+    if (!isMentioned && !isReplyToAgent) {
+      console.log(`⏭️  Agent not mentioned and not a reply to agent in comment ${commentData.id}`);
+      res.json({ received: true });
+      return;
+    }
+
+    if (isReplyToAgent && !isMentioned) {
+      console.log(`🔄 Processing threaded reply to agent in comment ${commentData.id} (parent: ${commentData.parentId})`);
+    } else if (isMentioned && isReplyToAgent) {
+      console.log(`🎯 Agent mentioned in threaded reply ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+    } else {
+      console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+    }
+
+    // Immediately acknowledge webhook to prevent Linear timeout
+    res.json({ received: true, processing: true });
+
+    // Process response asynchronously to avoid blocking webhook acknowledgment
+    this.processAgentResponse(commentData).catch(error => {
+      console.error('❌ Async response processing failed:', error);
+    });
+  }
+
   /**
    * Handle incoming webhook events with proper async timing for elicitations
    */
@@ -455,79 +571,21 @@ Need more specific guidance? Just ask what you're working on!`;
          url: event.url
        });
 
-       // Only handle Comment events (type is at root level, not in data)
-       if (event.type !== 'Comment') {
-         console.log(`⏭️  Skipping non-Comment event: ${event.type}`);
-         res.json({ received: true });
-         return;
-       }
+// Route events to appropriate handlers
+        if (event.type === 'Comment') {
+          // Handle Comment events
+          await this.handleCommentWebhook(event, res);
+          return;
+        } else if (event.type === 'AppUserNotification') {
+          // Handle AgentSession events
+          await this.handleAgentSessionWebhook(event, res);
+          return;
+        }
 
-       // Check if event.data exists and has required fields
-       if (!event.data || typeof event.data !== 'object') {
-         console.log('⏭️  No event.data object, skipping');
-         res.json({ received: true });
-         return;
-       }
-
-       const commentData = event.data as unknown as CommentData;
-       
-       // Validate comment data structure
-       if (!commentData.id) {
-         console.error('❌ Comment data missing required id field');
-         res.status(400).json({ error: 'Invalid comment data' });
-         return;
-       }
-
-       console.log(`📝 Processing comment ${commentData.id}:`, {
-         hasBody: !!commentData.body,
-         hasUser: !!commentData.user,
-         hasIssue: !!commentData.issue,
-         bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
-       });
-       
-       // Skip if we've already processed this comment
-       if (this.processedComments.has(commentData.id)) {
-         console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
-         res.json({ received: true });
-         return;
-       }
-
-       // Mark as processed to prevent duplicates
-       this.processedComments.add(commentData.id);
-
-       // Skip if comment is from the agent itself
-       if (commentData.user?.id === this.agentUserId) {
-         console.log(`⏭️  Skipping own comment ${commentData.id}`);
-         res.json({ received: true });
-         return;
-       }
-
-         // Check if agent is mentioned OR if this is a reply to an agent comment
-         const isMentioned = commentData.body && this.isAgentMentioned(commentData.body);
-         const isReplyToAgent = this.isReplyToAgent(commentData);
-         
-         if (!isMentioned && !isReplyToAgent) {
-           console.log(`⏭️  Agent not mentioned and not a reply to agent in comment ${commentData.id}`);
-           res.json({ received: true });
-           return;
-         }
-
-         if (isReplyToAgent && !isMentioned) {
-           console.log(`🔄 Processing threaded reply to agent in comment ${commentData.id} (parent: ${commentData.parentId})`);
-         } else if (isMentioned && isReplyToAgent) {
-           console.log(`🎯 Agent mentioned in threaded reply ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
-         } else {
-           console.log(`🎯 Agent mentioned in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
-         }
-
-       // Immediately acknowledge webhook to prevent Linear timeout
-       // This ensures Linear doesn't close the interaction while we process
-       res.json({ received: true, processing: true });
-
-       // Process response asynchronously to avoid blocking webhook acknowledgment
-       this.processAgentResponse(commentData).catch(error => {
-         console.error('❌ Async response processing failed:', error);
-       });
+// Skip unhandled event types
+       console.log(`⏭️  Skipping unhandled event type: ${event.type}`);
+       res.json({ received: true });
+       return;
 
      } catch (error) {
        console.error('❌ Webhook handling error:', error);
