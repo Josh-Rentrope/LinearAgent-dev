@@ -603,8 +603,8 @@ Need more specific guidance? Just ask what you're working on!`;
    }
 
    /**
-   * Process agent response asynchronously with proper timing synchronization
-   */
+    * Process agent response asynchronously with consolidated session logic
+    */
    private async processAgentResponse(commentData: CommentData): Promise<void> {
      try {
        // Check if this is a help/guide request
@@ -616,12 +616,72 @@ Need more specific guidance? Just ask what you're working on!`;
            `webhook-${commentData.id}`,
            response,
            commentData.issue.id,
-           commentData.id // Use the triggering comment as parent for threaded reply
+           commentData.id
          );
 
          console.log(`✅ Help response sent for comment ${commentData.id}`);
          return;
        }
+
+       // Extract session context and find existing session
+       const sessionContext = this.extractSessionContext(commentData);
+       
+       if (!sessionContext) {
+         // Fall back to regular response if context extraction fails
+         const response = await this.generateOpenCodeResponse(
+           commentData.body,
+           commentData.issue.title,
+           commentData.issue.identifier
+         );
+
+         await emitResponse(
+           `webhook-${commentData.id}`,
+           response,
+           commentData.issue.id,
+           commentData.id
+         );
+         return;
+       }
+
+       // Find existing session using consolidated logic
+       const existingSession = this.findExistingSession(sessionContext);
+       
+       let response: string;
+       if (existingSession) {
+         console.log(`🔄 Using existing session ${existingSession.id} (status: ${existingSession.status})`);
+         response = await this.handleSessionResponse(sessionContext, commentData.body, existingSession);
+       } else {
+         console.log(`🆕 Creating new session for comment ${commentData.id}`);
+         response = await this.handleSessionResponse(sessionContext, commentData.body);
+       }
+
+       await emitResponse(
+         `webhook-${commentData.id}`,
+         response,
+         commentData.issue.id,
+         commentData.id
+       );
+
+       console.log(`✅ Response sent for comment ${commentData.id}`);
+
+     } catch (error) {
+       console.error('❌ Agent response processing failed:', error);
+       
+       // Try to send error response to Linear
+       try {
+         const errorResponse = `❌ Sorry, I encountered an error while processing your request: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`;
+         
+         await emitResponse(
+           `webhook-${commentData.id}-error`,
+           errorResponse,
+           commentData.issue.id,
+           commentData.id
+         );
+       } catch (emitError) {
+         console.error('❌ Failed to send error response:', emitError);
+       }
+     }
+   }
 
        // Default to creating sessions for all other mentions
        console.log(`🔄 Creating session for mention in comment ${commentData.id}`);
