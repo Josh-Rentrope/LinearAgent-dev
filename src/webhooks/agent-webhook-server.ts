@@ -500,9 +500,12 @@ Need more specific guidance? Just ask what you're working on!`;
         webhookId: event.webhookId
       };
 
-      // Route to agent session handler
+      // Route to agent session handler and integrate with session manager
       if (this.linearClient) {
         await handleAgentSessionEvent(agentSessionEvent, this.linearClient);
+        
+        // Integrate AgentSessionEvent data with existing sessions
+        await this.integrateAgentSessionEvent(agentSessionEvent);
       }
 
       console.log(`✅ AgentSession event processed successfully`);
@@ -700,11 +703,54 @@ Need more specific guidance? Just ask what you're working on!`;
    }
 
   /**
-   * Update elicitation context based on user message and AI response
-  
-   * @issue JOS-150
+   * Integrate AgentSessionEvent data with session manager
    */
-  private updateElicitationFromResponse(sessionId: string, userMessage: string, aiResponse: string): void {
+   private async integrateAgentSessionEvent(event: any): Promise<void> {
+     try {
+       const notification = event.notification;
+       if (!notification.comment) return;
+
+       const commentId = notification.comment.id;
+       const userId = notification.comment.userId;
+       const issueId = notification.comment.issueId;
+
+       // Find existing session for this user/issue pair
+       const existingSession = this.findExistingSession({
+         userId,
+         issueId,
+         issueTitle: '',
+         issueDescription: '',
+         userName: '',
+         teamId: '',
+         commentId,
+         mentionText: notification.comment.body,
+         createdAt: new Date().toISOString()
+       });
+
+       if (existingSession) {
+         // Integrate elicitation context from AgentSessionEvent
+         this.sessionManager.integrateAgentSessionEvent(existingSession.id, {
+           userId,
+           issueId,
+           eventType: notification.type,
+           elicitationContext: {
+             userIntent: notification.type === 'issueCommentMention' ? 'question' : 'unknown',
+             confidence: 0.7,
+             pendingQuestions: notification.comment.body.includes('?') ? [notification.comment.body] : []
+           }
+         });
+       }
+     } catch (error) {
+       console.error('❌ Failed to integrate AgentSessionEvent:', error);
+     }
+   }
+
+   /**
+    * Update elicitation context based on user message and AI response
+  
+    * @issue JOS-150
+    */
+   private updateElicitationFromResponse(sessionId: string, userMessage: string, aiResponse: string): void {
     const elicitationContext = this.sessionManager.getElicitationContext(sessionId);
     if (!elicitationContext) return;
 
