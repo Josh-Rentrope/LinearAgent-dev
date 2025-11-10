@@ -198,20 +198,26 @@ Need more specific guidance? Just ask what you're working on!`;
   }
 
   /**
-   * Find relevant existing session for the user
+   * Find existing session for user with consolidated logic
    */
-  private findRelevantSession(userId: string, issueId?: string): OpenCodeSession | null {
+  private findExistingSession(sessionContext: SessionContext): OpenCodeSession | null {
     const userSessions = Array.from(this.sessionManager.sessions.values())
-      .filter(session => session.linearContext.userId === userId)
-      .filter(session => session.status === 'completed' || session.status === 'timeout')
-      .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime());
+      .filter(session => session.linearContext.userId === sessionContext.userId)
+      .filter(session => session.linearContext.issueId === sessionContext.issueId);
 
-    // Prefer sessions from the same issue
-    if (issueId) {
-      const sameIssueSession = userSessions.find(session => session.linearContext.issueId === issueId);
-      if (sameIssueSession) {
-        return sameIssueSession;
-      }
+    // Prioritize active sessions first
+    const activeSession = userSessions.find(session => session.status === 'active');
+    if (activeSession) {
+      return activeSession;
+    }
+
+    // Then look for completed/timeout sessions
+    const inactiveSession = userSessions
+      .filter(session => session.status === 'completed' || session.status === 'timeout')
+      .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime())[0];
+
+    return inactiveSession || null;
+  }
     }
 
     // Return the most recent inactive session
@@ -621,19 +627,16 @@ Need more specific guidance? Just ask what you're working on!`;
        let response: string;
 
         if (sessionContext) {
-         // For threaded replies, prioritize finding active sessions
-         const isReplyToAgent = this.isReplyToAgent(commentData);
-         let existingSession = null;
-
-         if (isReplyToAgent) {
-           // For threaded replies, look for active sessions first
-           existingSession = Array.from(this.sessionManager.sessions.values())
-             .find(session => 
-               session.linearContext.userId === sessionContext.userId &&
-               session.linearContext.issueId === sessionContext.issueId &&
-               session.status === 'active'
-             );
-         }
+        // Find existing session using consolidated logic
+          const existingSession = this.findExistingSession(sessionContext);
+          
+          if (existingSession) {
+            console.log(`🔄 Found existing session ${existingSession.id} (status: ${existingSession.status}), reactivating`);
+            response = await this.handleSessionResponse(sessionContext, commentData.body, existingSession);
+          } else {
+            console.log(`🆕 No existing session found, creating new session`);
+            response = await this.handleSessionResponse(sessionContext, commentData.body);
+          }
 
          if (!existingSession) {
            // Look for any relevant session (including completed/timeout ones)

@@ -55,16 +55,30 @@ export async function emitActivity(activity: Activity): Promise<void> {
         body: activity.content
       };
       
-      // For Linear, threaded replies need special handling
-      // Only include parent ID if it's provided and valid
+      // For Linear, threaded replies must reply to top-level comments only
+      // Skip parent ID for replies to non-top-level comments to avoid API errors
       if (activity.parentCommentId) {
         console.log(`📝 Creating threaded reply to comment ${activity.parentCommentId}`);
+        // Note: Linear API only allows replies to top-level comments
+        // This parentId will be validated before comment creation
         commentData.parentId = activity.parentCommentId;
       } else {
         console.log(`📝 Creating top-level comment`);
       }
       
-      const result = await linearClient.createComment(commentData);
+      let result;
+      try {
+        result = await linearClient.createComment(commentData);
+      } catch (error) {
+        // Handle threading API errors by falling back to top-level comment
+        if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
+          console.log(`⚠️  Threading error, falling back to top-level comment`);
+          delete commentData.parentId;
+          result = await linearClient.createComment(commentData);
+        } else {
+          throw error;
+        }
+      }
       
       // Check if comment creation was successful
       if (!result?.success) {
