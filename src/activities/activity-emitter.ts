@@ -56,7 +56,7 @@ interface Activity {
     current: number;
     total: number;
     stage: string;
-    estimatedCompletion?: string;
+    estimatedCompletion?: string | undefined;
   };
 }
 
@@ -253,7 +253,7 @@ export async function emitProgress(
       current: progress,
       total: 100,
       stage,
-      estimatedCompletion
+      estimatedCompletion 
     }
   });
 }
@@ -264,7 +264,7 @@ export async function emitProgress(
 export async function updateIssueStatus(
   issueId: string,
   status: 'todo' | 'in_progress' | 'done' | 'canceled',
-  linearClient?: LinearClient
+  linearClient?: LinearClient | null | undefined
 ): Promise<void> {
   try {
     if (!linearClient) {
@@ -273,9 +273,9 @@ export async function updateIssueStatus(
       
       linearClient = new LinearClient({ apiKey: botOAuthToken });
     }
-
+    
     // Get the issue to find the appropriate workflow state
-    const issue = await linearClient.issue({ id: issueId });
+    const issue = await linearClient.issue(issueId);
     if (!issue) return;
 
     // Get team workflow states

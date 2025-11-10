@@ -16,7 +16,8 @@ import { emitResponse, emitProgress, updateIssueStatus } from '../activities/act
 import { openCodeClient } from '../integrations/opencode-client';
 import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sessions/opencode-session-manager';
 import { todoManager } from '../todos/todo-manager';
-import { handleAgentSessionEvent, AgentSessionEvent, updateAgentSessionProgress, getAgentSessionStatus } from './handlers/agent-session-handler';
+import { handleAgentSessionEvent, AgentSessionEvent, updateAgentSessionProgress } from './handlers/agent-session-handler';
+//getAgentSessionStatus
 import { handleCommentEvent, CommentEvent, CommentData } from './handlers/comment-handler';
 import { SessionUtils } from '../sessions/session-utils';
 import { AgentDetection } from './utils/agent-detection';
@@ -24,7 +25,7 @@ import { ErrorHandler } from '../utils/error-handler';
 
 class LinearAgentWebhookServer {
   private app: express.Application;
-  private linearClient: LinearClient | null = null;
+  private linearClient: LinearClient | undefined | null= null;
   private agentUserId: string | null = null;
   private agentName: string;
   private processedComments = new Set<string>();
@@ -566,7 +567,7 @@ class LinearAgentWebhookServer {
     progress: number,
     stage: string,
     issueId?: string,
-    estimatedCompletion?: string
+    estimatedCompletion?: string | undefined
   ): Promise<void> {
     try {
       console.log(`📊 Progress: ${progress}% - ${stage}`);

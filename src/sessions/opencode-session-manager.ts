@@ -37,7 +37,7 @@ export interface OpenCodeSession {
     current: number;
     total: number;
     stage: string;
-    estimatedCompletion?: string;
+    estimatedCompletion?: string | undefined;
     lastUpdated: string;
   };
 }
@@ -462,7 +462,7 @@ export class OpenCodeSessionManager {
     current: number;
     total: number;
     stage: string;
-    estimatedCompletion?: string;
+    estimatedCompletion?: string | undefined;
   }): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -492,7 +492,7 @@ export class OpenCodeSessionManager {
     current: number;
     total: number;
     stage: string;
-    estimatedCompletion?: string;
+    estimatedCompletion?: string | undefined;
     lastUpdated: string;
   } | null {
     const session = this.sessions.get(sessionId)
