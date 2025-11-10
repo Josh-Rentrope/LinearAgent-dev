@@ -13,6 +13,7 @@ import { linearWebhookMiddleware } from '../security/signature-verification';
 import { emitResponse } from '../activities/activity-emitter';
 import { openCodeClient } from '../integrations/opencode-client';
 import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sessions/opencode-session-manager';
+import { todoManager } from '../todos/todo-manager';
 
 
 
@@ -152,6 +153,12 @@ I'm here to help you with development tasks and code-related work. Here are some
 • Refactor code for better maintainability
 • Set up project configurations and tooling
 
+**📋 TODO Management:**
+• Create TODOs from your requests: "Create a todo to implement X"
+• View current TODOs: "Show todo list"
+• Mark TODOs complete: "Mark todo [ID] complete"
+• Link tasks to Linear issues automatically
+
 **💬 Session-Based Work:**
 • Start a development session by mentioning me with any task
 • I'll maintain context across multiple messages
@@ -160,9 +167,9 @@ I'm here to help you with development tasks and code-related work. Here are some
 
 **📝 Example Prompts:**
 • \`@opencodeintegration implement user authentication\`
-• \`@opencodeintegration debug the login issue\`
+• \`@opencodeintegration create todo to fix the login bug\`
+• \`@opencodeintegration show todo list\`
 • \`@opencodeintegration review this pull request\`
-• \`@opencodeintegration create unit tests for the API\`
 
 **🚀 Getting Started:**
 Just mention me with any development task, and I'll create a session to help you accomplish it!
@@ -244,6 +251,38 @@ Need more specific guidance? Just ask what you're working on!`;
   }
 
   /**
+   * Extract TODO items from user message
+   */
+  private async extractAndCreateTodos(
+    userMessage: string,
+    sessionContext: SessionContext
+  ): Promise<string[]> {
+    const createdTodos: string[] = [];
+    
+    // Look for TODO patterns in the message
+    if (userMessage.toLowerCase().includes('todo') || 
+        userMessage.toLowerCase().includes('task') ||
+        userMessage.toLowerCase().includes('create')) {
+      
+      const todoMatch = userMessage.match(/(?:create|make|add)\s+(?:a\s+)?(?:todo|task|item)\s+(?:to\s+)?(.+?)(?:\.|$)/i);
+      if (todoMatch && todoMatch[1]) {
+        const todoText = todoMatch[1].trim();
+        if (todoText.length > 5) {
+          const todo = await todoManager.createTodo(
+            sessionContext.issueId + '_' + sessionContext.userId,
+            sessionContext.issueId,
+            todoText,
+            `Extracted from: "${userMessage.substring(0, 100)}..."`
+          );
+          createdTodos.push(`📋 Created TODO: ${todo.title} (ID: ${todo.id})`);
+        }
+      }
+    }
+
+    return createdTodos;
+  }
+
+  /**
    * Handle session-based response
    */
   private async handleSessionResponse(
@@ -253,6 +292,9 @@ Need more specific guidance? Just ask what you're working on!`;
     try {
       console.log(`🔄 Handling session response for issue ${sessionContext.issueId}`);
 
+      // Extract TODOs from the message
+      const todoResults = await this.extractAndCreateTodos(commentBody, sessionContext);
+      
       // Check if session already exists
       let session = this.sessionManager.getSessionByIssue(
         sessionContext.issueId,
@@ -283,10 +325,15 @@ Need more specific guidance? Just ask what you're working on!`;
             this.sessionManager.updateSessionStatus(session.id, 'active');
             
             // Now send the actual user message and get response
-            const response = await openCodeClient.sendSessionMessage(
+            let response = await openCodeClient.sendSessionMessage(
               opencodeSession.id,
               commentBody // Send user's message verbatim
             );
+            
+            // Add TODO creation results to response if any
+            if (todoResults.length > 0) {
+              response = `${todoResults.join('\n\n')}\n\n${response}`;
+            }
             
             return response; // Return the actual OpenCode response
 

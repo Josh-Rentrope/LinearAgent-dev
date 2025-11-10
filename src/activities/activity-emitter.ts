@@ -55,12 +55,21 @@ export async function emitActivity(activity: Activity): Promise<void> {
         body: activity.content
       };
       
-      // Add parent comment ID for threaded replies if provided
+      // For Linear, threaded replies need special handling
+      // Only include parent ID if it's provided and valid
       if (activity.parentCommentId) {
+        console.log(`📝 Creating threaded reply to comment ${activity.parentCommentId}`);
         commentData.parentId = activity.parentCommentId;
+      } else {
+        console.log(`📝 Creating top-level comment`);
       }
       
-      await linearClient.createComment(commentData);
+      const result = await linearClient.createComment(commentData);
+      
+      // Check if comment creation was successful
+      if (!result?.success) {
+        throw new Error(`Failed to create comment: ${result}`);
+      }
       
       console.log(`✅ Comment created successfully in Linear`);
     } else {

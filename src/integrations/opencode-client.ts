@@ -258,14 +258,15 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
 
   /**
    * Send a message to an OpenCode session using opencode serve API
-   * Enhanced with timeout handling for elicitations framework
+   * Enhanced with timeout handling and progress reporting for elicitations framework
    * @author Joshua Rentrope <joshua@opencode.ai>
    * @issue JOS-145, JOS-150
    */
   async sendSessionMessage(
     sessionId: string,
     message: string,
-    _stream: boolean = false
+    _stream: boolean = false,
+    statusCallback?: (status: string, details?: string) => void
   ): Promise<string> {
     if (!this.opencodeServeEnabled) {
       throw new Error('OpenCode Serve integration is not enabled');
@@ -274,7 +275,15 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
     try {
       console.log(`💬 Sending message to OpenCode session ${sessionId}...`);
       
+      if (statusCallback) {
+        statusCallback('Connecting to OpenCode', 'Establishing connection to AI workspace...');
+      }
+      
       const serveUrl = await this.getOpenCodeServeUrl();
+      
+      if (statusCallback) {
+        statusCallback('Preparing message', 'Formatting your request for AI processing...');
+      }
       
       const messageData: OpenCodeCreateMessageRequest = {
         parts: [
@@ -289,8 +298,15 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
         console.warn(`⏰ Session message timeout for ${sessionId}, aborting request`);
+        if (statusCallback) {
+          statusCallback('Timeout', 'Request is taking too long. Please try with a simpler request.');
+        }
         controller.abort();
       }, 45000); // 45 second timeout - less than Linear's typical 60s timeout
+
+      if (statusCallback) {
+        statusCallback('Processing', 'AI is analyzing your request and generating a response...');
+      }
 
       const response = await fetch(`${serveUrl}/session/${sessionId}/message`, {
         method: 'POST',
@@ -307,6 +323,10 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       if (!response.ok) {
         const errorData: OpenCodeError = await response.json().catch(() => ({}));
         throw new Error(`OpenCode Serve API ${response.status}: ${errorData.errors?.[0]?.message || response.statusText}`);
+      }
+
+      if (statusCallback) {
+        statusCallback('Finalizing', 'Processing AI response and preparing output...');
       }
 
       const data: OpenCodeMessageResponse = await response.json();
