@@ -21,14 +21,16 @@ async function findTopLevelComment(
       throw new Error(`Comment ${commentId} not found`);
     }
     
+    //const commentUser = await comment.user;
+    const commentParent = await comment.parent;
     // If comment has no parent, it's top-level
-    if (!comment.parentId) {
+    if (!commentParent) {
       console.log(`🎯 Comment ${commentId} is already top-level`);
       return commentId;
     }
     
     // Recursively find parent until we reach top-level
-    return await findTopLevelComment(comment.parentId, linearClient);
+    return await commentParent.id
     
   } catch (error) {
     console.error(`❌ Failed to find top-level comment for ${commentId}:`, error);
