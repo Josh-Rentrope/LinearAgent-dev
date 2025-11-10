@@ -189,12 +189,11 @@ export async function getCommentHierarchy(
   }
   
   try {
-    // Recursively traverse up comment tree to find top-level comment
-    const topLevelComment = await findTopLevelCommentRecursive(
-      commentData.parentId,
+    // Find top-level comment using Linear SDK
+    const topLevelComment = await findTopLevelComment(
+      commentData.parentId!,
       linearClient,
-      commentData.issue,
-      0 // Start depth from 1 (parent level)
+      commentData.issue
     );
     
     hierarchy.topLevel = topLevelComment;
@@ -213,56 +212,39 @@ export async function getCommentHierarchy(
 }
 
 /**
- * Recursively find top-level comment by traversing up parent chain
- * Note: This is a simplified implementation that will be enhanced with proper Linear SDK integration
+ * Find top-level comment using Linear SDK API
  */
-async function findTopLevelCommentRecursive(
+async function findTopLevelComment(
   commentId: string,
   linearClient: LinearClient,
-  issueContext: CommentData['issue'],
-  currentDepth: number
+  issueContext: CommentData['issue']
 ): Promise<CommentData> {
-  // Prevent infinite recursion with depth limit
-  if (currentDepth > 10) {
-    console.warn(`⚠️  Maximum recursion depth reached for comment ${commentId}`);
-    throw new Error('Maximum comment depth exceeded');
-  }
-  
   try {
-    // TODO: Implement proper Linear SDK integration
-    // For now, we'll create a mock comment structure based on heuristics
-    // This will be enhanced with actual Linear API calls
+    // Get the comment using Linear SDK
+    const comment = await linearClient.comment(commentId);
     
-    const mockCommentData: CommentData = {
-      id: commentId,
-      body: 'Mock comment body for threading analysis',
-      issue: issueContext,
-      user: {
-        id: 'mock-user-id',
-        name: 'Mock User'
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    
-    // Only add parentId if it exists to satisfy exactOptionalPropertyTypes
-    if (currentDepth < 3) {
-      mockCommentData.parentId = `parent-${commentId}`;
+    if (!comment) {
+      throw new Error(`Comment ${commentId} not found`);
     }
     
-    // If this comment has no parent, it's top-level comment
-    if (!mockCommentData.parentId) {
-      console.log(`🎯 Found top-level comment: ${mockCommentData.id} at depth ${currentDepth}`);
-      return mockCommentData;
+    // If comment has no parent, it's top-level
+    if (!comment.parentId) {
+      console.log(`🎯 Found top-level comment: ${comment.id}`);
+      return {
+        id: comment.id,
+        body: comment.body || '',
+        issue: issueContext,
+        user: {
+          id: comment.user?.id || '',
+          name: comment.user?.name || 'Unknown'
+        },
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt
+      };
     }
     
-    // Continue recursion up the parent chain
-    return await findTopLevelCommentRecursive(
-      mockCommentData.parentId,
-      linearClient,
-      issueContext,
-      currentDepth + 1
-    );
+    // Recursively find parent until we reach top-level
+    return await findTopLevelComment(comment.parentId, linearClient, issueContext);
     
   } catch (error) {
     console.error(`❌ Failed to get comment ${commentId}:`, error);
@@ -295,29 +277,49 @@ async function calculateCommentDepth(
 }
 
 /**
- * Check if a thread contains agent comments by traversing comment tree
- * Note: This is a simplified implementation that will be enhanced with proper Linear SDK integration
+ * Check if a thread contains agent comments using Linear SDK
  */
 async function checkThreadForAgentComments(
   topLevelCommentId: string,
-  _linearClient: LinearClient,
-  _agentUserId: string
+  linearClient: LinearClient,
+  agentUserId: string
 ): Promise<boolean> {
   try {
     console.log(`🔍 Checking thread for agent comments (top-level: ${topLevelCommentId})`);
     
-    // TODO: Implement proper Linear SDK integration to check thread comments
-    // This would require GraphQL queries to efficiently get all comments in a thread
-    // For now, we'll implement a basic heuristic check
+    // Get the top-level comment
+    const topLevelComment = await linearClient.comment(topLevelCommentId);
     
-    // Simple heuristic: check if comment ID suggests agent involvement
-    // This is a placeholder until proper Linear SDK integration
-    const hasAgentInvolvement = topLevelCommentId.includes('agent') || 
-                               topLevelCommentId.includes('opencode');
+    if (!topLevelComment) {
+      console.log(`⚠️  Top-level comment ${topLevelCommentId} not found`);
+      return false;
+    }
     
-    console.log(`📝 Thread check: top-level comment ${topLevelCommentId} agent involvement: ${hasAgentInvolvement}`);
+    // Check if top-level comment is from agent
+    if (topLevelComment.user?.id === agentUserId) {
+      console.log(`✅ Top-level comment ${topLevelCommentId} is from agent`);
+      return true;
+    }
     
-    return hasAgentInvolvement;
+    // Get issue to find all comments in thread
+    const issue = await linearClient.issue(topLevelComment.issueId);
+    if (!issue) {
+      console.log(`⚠️  Issue ${topLevelComment.issueId} not found`);
+      return false;
+    }
+    
+    // Get comments from the issue and check if any are from agent in this thread
+    const comments = await issue.comments();
+    for (const comment of comments.nodes) {
+      if (comment.user?.id === agentUserId && 
+          (comment.id === topLevelCommentId || comment.parentId === topLevelCommentId)) {
+        console.log(`✅ Found agent comment ${comment.id} in thread`);
+        return true;
+      }
+    }
+    
+    console.log(`📝 Thread check: no agent comments found in thread ${topLevelCommentId}`);
+    return false;
     
   } catch (error) {
     console.error(`❌ Failed to check thread for agent comments:`, error);
