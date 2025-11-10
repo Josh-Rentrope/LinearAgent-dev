@@ -304,7 +304,8 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       
       // Send initial message if provided
       if (initialMessage && data.id) {
-        await this.sendSessionMessage(data.id, initialMessage);
+        const enhancedMessage = `Comment started from issue ${linearContext.issueId}\n\n${initialMessage}`;
+        await this.sendSessionMessage(data.id, enhancedMessage);
       }
 
       return data;
