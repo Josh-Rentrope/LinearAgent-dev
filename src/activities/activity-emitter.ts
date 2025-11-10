@@ -7,12 +7,44 @@
 
 import { LinearClient } from '@linear/sdk';
 
+/**
+ * Find the top-level comment in a thread
+ */
+async function findTopLevelComment(
+  commentId: string,
+  linearClient: LinearClient
+): Promise<string> {
+  try {
+    const comment = await linearClient.comment({ id: commentId });
+    
+    if (!comment) {
+      throw new Error(`Comment ${commentId} not found`);
+    }
+    
+    //const commentUser = await comment.user;
+    const commentParent = await comment.parent;
+    // If comment has no parent, it's top-level
+    if (!commentParent) {
+      console.log(`🎯 Comment ${commentId} is already top-level`);
+      return commentId;
+    }
+    
+    // Recursively find parent until we reach top-level
+    return await commentParent.id
+    
+  } catch (error) {
+    console.error(`❌ Failed to find top-level comment for ${commentId}:`, error);
+    throw error;
+  }
+}
+
 interface Activity {
   sessionId: string;
   type: 'thought' | 'action' | 'elicitation' | 'response' | 'error';
   content: string;
   issueId: string;
   externalUrl?: string;
+  parentCommentId?: string; // For threaded replies
   signal?: {
     type: 'auth' | 'select' | 'stop';
     payload?: any;
@@ -25,18 +57,15 @@ interface Activity {
  */
 export async function emitActivity(activity: Activity): Promise<void> {
   try {
-    // Use bot OAuth token for comment creation to avoid infinite loops
+    // Use only bot OAuth token for consistent authentication
     const botOAuthToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
-    const apiKey = process.env.LINEAR_API_KEY;
     
-    if (!botOAuthToken && !apiKey) {
-      throw new Error('Neither LINEAR_BOT_OAUTH_TOKEN nor LINEAR_API_KEY configured');
+    if (!botOAuthToken) {
+      throw new Error('LINEAR_BOT_OAUTH_TOKEN not configured');
     }
     
-    // Prefer bot OAuth token for comments, fall back to API key
-    const token = botOAuthToken || apiKey;
     const linearClient = new LinearClient({
-      apiKey: token!
+      apiKey: botOAuthToken
     });
     
     console.log(`📤 Emitting ${activity.type} activity:`, {
@@ -49,10 +78,50 @@ export async function emitActivity(activity: Activity): Promise<void> {
     if (activity.type === 'response') {
       console.log(`💬 Creating Linear comment for issue ${activity.issueId}`);
       
-      await linearClient.createComment({
+      const commentData: any = {
         issueId: activity.issueId,
         body: activity.content
-      });
+      };
+      
+      // For Linear, threaded replies must reply to top-level comments only
+      // When creating a reply, find the top-level comment to ensure proper threading
+      if (activity.parentCommentId) {
+        console.log(`📝 Creating threaded reply to comment ${activity.parentCommentId}`);
+        
+        try {
+          // Find the top-level comment in the thread
+          const topLevelCommentId = await findTopLevelComment(activity.parentCommentId, linearClient);
+          console.log(`🔗 Using top-level comment ${topLevelCommentId} for reply`);
+          
+          // Set parent to top-level comment for proper threading
+          commentData.parentId = topLevelCommentId;
+        } catch (error) {
+          console.log(`⚠️  Failed to find top-level comment, creating top-level comment instead`);
+          // Fallback to creating top-level comment
+          delete commentData.parentId;
+        }
+      } else {
+        console.log(`📝 Creating top-level comment`);
+      }
+      
+      let result;
+      try {
+        result = await linearClient.createComment(commentData);
+      } catch (error) {
+        // Handle threading API errors by falling back to top-level comment
+        if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
+          console.log(`⚠️  Threading error, falling back to top-level comment`);
+          delete commentData.parentId;
+          result = await linearClient.createComment(commentData);
+        } else {
+          throw error;
+        }
+      }
+      
+      // Check if comment creation was successful
+      if (!result?.success) {
+        throw new Error(`Failed to create comment: ${result}`);
+      }
       
       console.log(`✅ Comment created successfully in Linear`);
     } else {
@@ -123,13 +192,15 @@ export async function emitElicitation(
 export async function emitResponse(
   sessionId: string,
   content: string,
-  issueId: string
+  issueId: string,
+  parentCommentId?: string
 ): Promise<void> {
   await emitActivity({
     sessionId,
     type: 'response',
     content: content,
-    issueId
+    issueId,
+    ...(parentCommentId && { parentCommentId })
   });
 }
 

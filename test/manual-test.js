@@ -29,7 +29,7 @@ async function simulateCommentHandling(comment, isOwnComment) {
   // Simulate creating a response
   await mockLinearClient.createComment({
     issueId: comment.issueId,
-    body: `🤖 I understand you want help with: "${}"`,
+    body: `🤖 I understand you want help with: "${comment.body}"`,
     parentId: comment.id
   });
   
