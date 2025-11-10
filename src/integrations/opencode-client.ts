@@ -10,6 +10,7 @@
 
 import { OpenCodeSession, SessionContext } from '../sessions/opencode-session-manager';
 import { getOpenCodeServeUrl } from '../utils/port-detector';
+import { ErrorHandler } from '../utils/error-handler';
 
 interface OpenCodeError {
   errors: Array<{
@@ -194,7 +195,8 @@ export class OpenCodeClient {
 
       if (!response.ok) {
         const errorData: OpenCodeError = await response.json().catch(() => ({}));
-        throw new Error(`OpenCode API ${response.status}: ${errorData.errors?.[0]?.message || response.statusText}`);
+        const errorMessage = `OpenCode API ${response.status}: ${errorData.errors?.[0]?.message || response.statusText}`;
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -212,7 +214,7 @@ export class OpenCodeClient {
       return await this.retryWithBackoff(operation, 'OpenCode API response generation');
     } catch (error) {
       console.error('❌ OpenCode API error after retries:', error);
-      return this.getFallbackResponse(prompt);
+      return ErrorHandler.createFallbackResponse(prompt, 'OpenCode API');
     }
   }
 

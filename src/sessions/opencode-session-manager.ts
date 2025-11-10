@@ -1,3 +1,5 @@
+import { SessionConfiguration } from './session-config';
+
 /**
  * Session context for Linear webhook events
 
@@ -36,9 +38,9 @@ export interface OpenCodeSession {
 export interface SessionCreateOptions {
   timeoutMinutes?: number
   maxMessages?: number
-  initialContext?: string
-  elicitationMode?: boolean
-  priority?: 'low' | 'medium' | 'high'
+  initialContext?: string | undefined
+  elicitationMode?: boolean | undefined
+  priority?: 'low' | 'medium' | 'high' | undefined
 }
 
 export interface ElicitationContext {
@@ -72,6 +74,7 @@ export class OpenCodeSessionManager {
     options: SessionCreateOptions = {}
   ): Promise<OpenCodeSession> {
     const sessionId = this.generateSessionId(linearContext.issueId, linearContext.userId)
+    const config = SessionConfiguration.load()
     
     const session: OpenCodeSession = {
       id: sessionId,
@@ -79,7 +82,13 @@ export class OpenCodeSessionManager {
       status: 'creating',
       createdAt: new Date().toISOString(),
       lastActivity: new Date().toISOString(),
-      options,
+      options: {
+        timeoutMinutes: options.timeoutMinutes ?? config.timeoutMinutes,
+        maxMessages: options.maxMessages ?? config.maxMessages,
+        initialContext: options.initialContext,
+        elicitationMode: options.elicitationMode,
+        priority: options.priority
+      },
       messageCount: 0,
       errorCount: 0,
       elicitationContext: options.elicitationMode ? {

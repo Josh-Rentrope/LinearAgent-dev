@@ -3,9 +3,12 @@
  * 
  * Emits activities back to Linear to show agent progress
  * and communication with users.
+ * 
+ * Refactored for JOS-158 to improve error handling and maintainability.
  */
 
 import { LinearClient } from '@linear/sdk';
+import { ErrorHandler } from '../utils/error-handler';
 
 /**
  * Find the top-level comment in a thread
@@ -107,16 +110,16 @@ export async function emitActivity(activity: Activity): Promise<void> {
       let result;
       try {
         result = await linearClient.createComment(commentData);
-      } catch (error) {
-        // Handle threading API errors by falling back to top-level comment
-        if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
-          console.log(`⚠️  Threading error, falling back to top-level comment`);
-          delete commentData.parentId;
-          result = await linearClient.createComment(commentData);
-        } else {
-          throw error;
+        } catch (error) {
+          // Handle threading API errors by falling back to top-level comment
+          if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
+            console.log(`⚠️  Threading error, falling back to top-level comment`);
+            delete commentData.parentId;
+            result = await linearClient.createComment(commentData);
+          } else {
+            throw ErrorHandler.handleLinearApiError(error, 'Comment Creation');
+          }
         }
-      }
       
       // Check if comment creation was successful
       if (!result?.success) {
@@ -131,7 +134,7 @@ export async function emitActivity(activity: Activity): Promise<void> {
     }
     
   } catch (error) {
-    console.error('❌ Failed to emit activity:', error);
+    ErrorHandler.handleWebhookError(error, activity.sessionId, 'Activity Emission');
     // Don't throw here - activity emission failure shouldn't break main flow
   }
 }

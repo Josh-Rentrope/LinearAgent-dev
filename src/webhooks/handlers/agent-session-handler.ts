@@ -3,9 +3,12 @@
  * 
  * Handles AppUserNotification events from Linear webhooks.
  * Processes session lifecycle events and extracts elicitation context.
+ * 
+ * Refactored for JOS-158 to improve error handling and maintainability.
  */
 
 import { LinearClient } from '@linear/sdk';
+import { ErrorHandler } from '../../utils/error-handler';
 
 export interface AgentSessionEvent {
   type: 'AppUserNotification';
@@ -71,7 +74,7 @@ export async function handleAgentSessionEvent(
     }
     
   } catch (error) {
-    console.error('❌ Failed to process AgentSessionEvent:', error);
+    ErrorHandler.handleWebhookError(error, event.webhookId, 'AgentSession Event');
     throw error;
   }
 }
