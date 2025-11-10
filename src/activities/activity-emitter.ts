@@ -7,6 +7,35 @@
 
 import { LinearClient } from '@linear/sdk';
 
+/**
+ * Find the top-level comment in a thread
+ */
+async function findTopLevelComment(
+  commentId: string,
+  linearClient: LinearClient
+): Promise<string> {
+  try {
+    const comment = await linearClient.comment({ id: commentId });
+    
+    if (!comment) {
+      throw new Error(`Comment ${commentId} not found`);
+    }
+    
+    // If comment has no parent, it's top-level
+    if (!comment.parentId) {
+      console.log(`🎯 Comment ${commentId} is already top-level`);
+      return commentId;
+    }
+    
+    // Recursively find parent until we reach top-level
+    return await findTopLevelComment(comment.parentId, linearClient);
+    
+  } catch (error) {
+    console.error(`❌ Failed to find top-level comment for ${commentId}:`, error);
+    throw error;
+  }
+}
+
 interface Activity {
   sessionId: string;
   type: 'thought' | 'action' | 'elicitation' | 'response' | 'error';
@@ -53,12 +82,22 @@ export async function emitActivity(activity: Activity): Promise<void> {
       };
       
       // For Linear, threaded replies must reply to top-level comments only
-      // Skip parent ID for replies to non-top-level comments to avoid API errors
+      // When creating a reply, find the top-level comment to ensure proper threading
       if (activity.parentCommentId) {
         console.log(`📝 Creating threaded reply to comment ${activity.parentCommentId}`);
-        // Note: Linear API only allows replies to top-level comments
-        // This parentId will be validated before comment creation
-        commentData.parentId = activity.parentCommentId;
+        
+        try {
+          // Find the top-level comment in the thread
+          const topLevelCommentId = await findTopLevelComment(activity.parentCommentId, linearClient);
+          console.log(`🔗 Using top-level comment ${topLevelCommentId} for reply`);
+          
+          // Set parent to top-level comment for proper threading
+          commentData.parentId = topLevelCommentId;
+        } catch (error) {
+          console.log(`⚠️  Failed to find top-level comment, creating top-level comment instead`);
+          // Fallback to creating top-level comment
+          delete commentData.parentId;
+        }
       } else {
         console.log(`📝 Creating top-level comment`);
       }
