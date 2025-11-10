@@ -33,6 +33,13 @@ export interface OpenCodeSession {
   elicitationContext?: ElicitationContext | undefined
   messageCount?: number
   errorCount?: number
+  progress?: {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string;
+    lastUpdated: string;
+  };
 }
 
 export interface SessionCreateOptions {
@@ -418,10 +425,10 @@ export class OpenCodeSessionManager {
   }
 
   /**
-    * Update elicitation phase based on AgentSessionEvent type
+   * Update elicitation phase based on AgentSessionEvent type
    
-    * @issue JOS-156
-    */
+   * @issue JOS-156
+   */
   private updateElicitationPhaseFromEvent(sessionId: string, eventType: string): void {
     const session = this.sessions.get(sessionId)
     if (!session || !session.elicitationContext) return
@@ -444,6 +451,52 @@ export class OpenCodeSessionManager {
     }
 
     this.updateElicitationPhase(sessionId, newPhase, `Event: ${eventType}`)
+  }
+
+  /**
+   * Update session progress tracking
+   
+   * @issue JOS-159
+   */
+  updateSessionProgress(sessionId: string, progress: {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string;
+  }): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    session.progress = {
+      ...progress,
+      lastUpdated: new Date().toISOString()
+    }
+    session.lastActivity = new Date().toISOString()
+
+    console.log(`📊 Updated session ${sessionId} progress: ${progress.current}/${progress.total} - ${progress.stage}`)
+
+    // Auto-update session status based on progress
+    if (progress.current >= 100 && session.status === 'active') {
+      this.completeSession(sessionId, 'Progress completed')
+    } else if (progress.current > 0 && session.status === 'creating') {
+      this.updateSessionStatus(sessionId, 'active')
+    }
+  }
+
+  /**
+   * Get session progress
+   
+   * @issue JOS-159
+   */
+  getSessionProgress(sessionId: string): {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string;
+    lastUpdated: string;
+  } | null {
+    const session = this.sessions.get(sessionId)
+    return session?.progress || null
   }
 
 

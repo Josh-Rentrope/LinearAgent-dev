@@ -43,7 +43,7 @@ async function findTopLevelComment(
 
 interface Activity {
   sessionId: string;
-  type: 'thought' | 'action' | 'elicitation' | 'response' | 'error';
+  type: 'thought' | 'action' | 'elicitation' | 'response' | 'error' | 'progress';
   content: string;
   issueId: string;
   externalUrl?: string;
@@ -51,6 +51,12 @@ interface Activity {
   signal?: {
     type: 'auth' | 'select' | 'stop';
     payload?: any;
+  };
+  progress?: {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string;
   };
 }
 
@@ -221,4 +227,77 @@ export async function emitError(
     content: `❌ ${content}`,
     issueId
   });
+}
+
+/**
+ * Emit a progress activity with detailed tracking
+ */
+export async function emitProgress(
+  sessionId: string,
+  progress: number,
+  stage: string,
+  issueId: string,
+  estimatedCompletion?: string
+): Promise<void> {
+  const progressIcon = progress === 100 ? '✅' : progress >= 75 ? '🔄' : progress >= 50 ? '⚡' : '📊';
+  const content = estimatedCompletion 
+    ? `${progressIcon} **Progress: ${progress}%** - ${stage} (ETA: ${estimatedCompletion})`
+    : `${progressIcon} **Progress: ${progress}%** - ${stage}`;
+    
+  await emitActivity({
+    sessionId,
+    type: 'progress',
+    content,
+    issueId,
+    progress: {
+      current: progress,
+      total: 100,
+      stage,
+      estimatedCompletion
+    }
+  });
+}
+
+/**
+ * Update Linear issue status based on progress
+ */
+export async function updateIssueStatus(
+  issueId: string,
+  status: 'todo' | 'in_progress' | 'done' | 'canceled',
+  linearClient?: LinearClient
+): Promise<void> {
+  try {
+    if (!linearClient) {
+      const botOAuthToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
+      if (!botOAuthToken) return;
+      
+      linearClient = new LinearClient({ apiKey: botOAuthToken });
+    }
+
+    // Get the issue to find the appropriate workflow state
+    const issue = await linearClient.issue({ id: issueId });
+    if (!issue) return;
+
+    // Get team workflow states
+    const team = await issue.team;
+    if (!team) return;
+
+    const workflowStates = await team.states();
+    const targetState = workflowStates.nodes.find(state => {
+      switch (status) {
+        case 'todo': return state.type === 'backlog' || state.type === 'unstarted';
+        case 'in_progress': return state.type === 'started' || state.type === 'in_progress';
+        case 'done': return state.type === 'completed' || state.type === 'done';
+        case 'canceled': return state.type === 'canceled' || state.type === 'cancelled';
+        default: return false;
+      }
+    });
+
+    if (targetState) {
+      await issue.update({ stateId: targetState.id });
+      console.log(`🔄 Updated issue ${issueId} status to: ${targetState.name}`);
+    }
+  } catch (error) {
+    console.error('❌ Failed to update issue status:', error);
+  }
 }
