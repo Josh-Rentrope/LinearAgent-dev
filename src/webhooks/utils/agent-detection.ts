@@ -7,8 +7,7 @@
  * @issue JOS-158
  */
 
-import { LinearClient } from '@linear/sdk';
-import { CommentData } from '../handlers/comment-handler';
+import { LinearClient, Comment } from '@linear/sdk';
 
 /**
  * Consolidated agent detection utilities
@@ -82,28 +81,28 @@ export class AgentDetection {
    * Check if comment is a reply to an agent comment
    * Consolidated logic with caching for performance
    */
-  static async isReplyToAgent(
-    commentData: CommentData,
+static async isReplyToAgent(
+    commentData: Comment,
     linearClient: LinearClient,
     agentUserId: string
   ): Promise<boolean> {
     // Check if comment has a parent (is a reply in a thread)
-    if (!commentData.parentId) {
+    if (!commentData.parent) {
       return false;
     }
     
     try {
       // Get the parent comment directly
-      const parentComment = await linearClient.comment({ id: commentData.parentId });
+      const parentComment = await commentData.parent;
       
       if (!parentComment) {
-        console.log(`⚠️  Parent comment ${commentData.parentId} not found`);
+        console.log(`⚠️  Parent comment not found`);
         return false;
       }
       
       // Check if parent comment is from agent
-      const parentUser = parentComment.user;
-      if (parentUser && 'id' in parentUser && parentUser.id === agentUserId) {
+      const parentUser = await parentComment.user;
+      if (parentUser && parentUser.id === agentUserId) {
         console.log(`✅ Comment ${commentData.id} is reply to agent comment ${parentComment.id}`);
         return true;
       }
@@ -120,8 +119,8 @@ export class AgentDetection {
   /**
    * Check if comment should be processed based on agent interaction
    */
-  static async shouldProcessComment(
-    commentData: CommentData,
+static async shouldProcessComment(
+    commentData: Comment,
     agentName: string,
     linearClient: LinearClient,
     agentUserId: string
@@ -139,8 +138,9 @@ export class AgentDetection {
     }
 
     let reason = '';
+const parentComment = await commentData.parent;
     if (isReply && !isMentioned) {
-      reason = `Threaded reply to agent (parent: ${commentData.parentId})`;
+      reason = `Threaded reply to agent (parent: ${parentComment?.id})`;
     } else if (isMentioned && isReply) {
       reason = `Agent mentioned in threaded reply`;
     } else {

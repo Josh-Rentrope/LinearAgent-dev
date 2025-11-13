@@ -4,13 +4,12 @@
  * Main webhook server for handling Linear events and agent mentions.
  * Uses bot OAuth token to prevent infinite loops and integrates with OpenCode LLM.
  * 
- * Refactored for JOS-158 to eliminate duplication and improve maintainability.
  */
 
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { LinearClient } from '@linear/sdk';
+import { LinearClient, Comment } from '@linear/sdk';
 import { linearWebhookMiddleware } from '../security/signature-verification';
 import { emitResponse, emitProgress, updateIssueStatus } from '../activities/activity-emitter';
 import { openCodeClient } from '../integrations/opencode-client';
@@ -18,7 +17,7 @@ import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sess
 import { todoManager } from '../todos/todo-manager';
 import { handleAgentSessionEvent, AgentSessionEvent, updateAgentSessionProgress } from './handlers/agent-session-handler';
 //getAgentSessionStatus
-import { handleCommentEvent, CommentEvent, CommentData } from './handlers/comment-handler';
+import { handleCommentEvent, CommentEvent } from './handlers/comment-handler';
 import { SessionUtils } from '../sessions/session-utils';
 import { AgentDetection } from './utils/agent-detection';
 import { ErrorHandler } from '../utils/error-handler';
@@ -118,7 +117,7 @@ class LinearAgentWebhookServer {
   }
 
   /**
-   * Extract TODO items from user message
+   * Extract TODO items from user message:  Come back to this
    */
   private async extractAndCreateTodos(
     userMessage: string,
@@ -278,7 +277,7 @@ class LinearAgentWebhookServer {
         return;
       }
 
-      const commentData = event.data as CommentData;
+      const commentData = event.data as Comment;
       
       // Validate comment data structure
       if (!commentData.id) {
@@ -332,7 +331,7 @@ class LinearAgentWebhookServer {
   private async handleAgentSessionWebhook(event: any, res: express.Response): Promise<void> {
     try {
       console.log(`🔄 Processing AgentSession event: ${event.type}`);
-
+      console.log(event.data);
       // Create AgentSessionEvent object
       const agentSessionEvent: AgentSessionEvent = {
         type: 'AppUserNotification',
@@ -361,9 +360,10 @@ class LinearAgentWebhookServer {
   /**
    * Process comment event with consolidated logic
    */
-  private async processCommentEvent(commentData: CommentData, res: express.Response): Promise<void> {
+private async processCommentEvent(commentData: Comment, res: express.Response): Promise<void> {
     // Skip if comment is from the agent itself
-    if (commentData.user?.id === this.agentUserId) {
+    const user = await commentData.user;
+    if (user?.id === this.agentUserId) {
       console.log(`⏭️  Skipping own comment ${commentData.id}`);
       res.json({ received: true });
       return;
@@ -383,7 +383,8 @@ class LinearAgentWebhookServer {
       return;
     }
 
-    console.log(`🎯 ${shouldProcess.reason} in comment ${commentData.id} by ${commentData.user?.name || 'Unknown User'}`);
+    const commentUser = await commentData.user;
+    console.log(`🎯 ${shouldProcess.reason} in comment ${commentData.id} by ${commentUser?.name || 'Unknown User'}`);
 
     // Immediately acknowledge webhook to prevent Linear timeout
     res.json({ received: true, processing: true });
@@ -447,14 +448,21 @@ class LinearAgentWebhookServer {
   /**
    * Process agent response asynchronously with streaming progress and timeout handling
    */
-  private async processAgentResponse(commentData: CommentData): Promise<void> {
+private async processAgentResponse(commentData: Comment): Promise<void> {
     const sessionId = `webhook-${commentData.id}`;
     let session: OpenCodeSession | null = null;
     
     try {
+      // Get issue data from LinearFetch
+      const issue = await commentData.issue;
+      if (!issue) {
+        console.error('❌ No issue data available for comment');
+        return;
+      }
+
       // Send immediate acknowledgment comment to prevent timeout perception
       await this.sendProgressComment(
-        commentData.issue.id,
+        issue.id,
         commentData.id,
         "🔄 Processing your request...",
         sessionId
@@ -464,79 +472,85 @@ class LinearAgentWebhookServer {
       if (AgentDetection.isHelpRequest(commentData.body)) {
         console.log(`📚 Providing help/guide response for comment ${commentData.id}`);
         
-        await this.updateProgress(sessionId, 25, "Generating help response", commentData.issue.id);
+        await this.updateProgress(sessionId, 25, "Generating help response", issue.id);
         const response = AgentDetection.generateHelpResponse();
         
-        await this.updateProgress(sessionId, 100, "Help response complete", commentData.issue.id);
-        await emitResponse(sessionId, response, commentData.issue.id, commentData.id);
+        await this.updateProgress(sessionId, 100, "Help response complete", issue.id);
+        await emitResponse(sessionId, response, issue.id, commentData.id);
 
         console.log(`✅ Help response sent for comment ${commentData.id}`);
         return;
       }
 
       // Extract session context using consolidated utility
-      const sessionContext = SessionUtils.extractSessionContext(commentData);
+      const sessionContext = await SessionUtils.extractSessionContext(commentData);
       
       if (!sessionContext) {
         // Fall back to regular response if context extraction fails
-        await this.updateProgress(sessionId, 25, "Generating standard response", commentData.issue.id);
+        await this.updateProgress(sessionId, 25, "Generating standard response", issue.id);
         const response = await this.generateOpenCodeResponse(
           commentData.body,
-          commentData.issue.title,
-          commentData.issue.identifier
+          issue.title,
+          issue.identifier
         );
 
-        await this.updateProgress(sessionId, 100, "Response complete", commentData.issue.id);
-        await emitResponse(sessionId, response, commentData.issue.id, commentData.id);
+        await this.updateProgress(sessionId, 100, "Response complete", issue.id);
+        await emitResponse(sessionId, response, issue.id, commentData.id);
         return;
       }
 
       // Find existing session using consolidated logic
       let existingSession = SessionUtils.findExistingSession(this.sessionManager, sessionContext);
       
-      await this.updateProgress(sessionId, 25, existingSession ? "Resuming session" : "Creating new session", commentData.issue.id);
+      await this.updateProgress(sessionId, 25, existingSession ? "Resuming session" : "Creating new session", issue.id);
       
       let response: string;
       if (existingSession) {
         console.log(`🔄 Using existing session ${existingSession.id} (status: ${existingSession.status})`);
         session = existingSession;
         
-        await this.updateProgress(sessionId, 50, "Processing with existing session", commentData.issue.id);
+        await this.updateProgress(sessionId, 50, "Processing with existing session", issue.id);
         response = await this.handleSessionResponse(sessionContext, commentData.body, existingSession);
       } else {
         console.log(`🆕 Creating new session for comment ${commentData.id}`);
         
-        await this.updateProgress(sessionId, 40, "Initializing new session", commentData.issue.id);
+        await this.updateProgress(sessionId, 40, "Initializing new session", issue.id);
         response = await this.handleSessionResponse(sessionContext, commentData.body);
         
         // Get the newly created session
         session = SessionUtils.findExistingSession(this.sessionManager, sessionContext);
       }
 
-      await this.updateProgress(sessionId, 90, "Finalizing response", commentData.issue.id);
-      await emitResponse(sessionId, response, commentData.issue.id, commentData.id);
-      await this.updateProgress(sessionId, 100, "Response complete", commentData.issue.id);
+      await this.updateProgress(sessionId, 90, "Finalizing response", issue.id);
+      await emitResponse(sessionId, response, issue.id, commentData.id);
+      await this.updateProgress(sessionId, 100, "Response complete", issue.id);
 
       console.log(`✅ Response sent for comment ${commentData.id}`);
 
     } catch (error) {
       console.error('❌ Agent response processing failed:', error);
       
-      // Update progress with error state
-      await this.updateProgress(sessionId, 0, "Error occurred during processing", commentData.issue.id);
+      // Get issue for error handling
+      const issue = await commentData.issue;
+      const issueId = issue?.id;
       
-      // Try to send error response to Linear
-      try {
-        const errorResponse = ErrorHandler.createErrorResponse(error, 'Agent Response');
+      if (issueId) {
+        // Update progress with error state
+        await this.updateProgress(sessionId, 0, "Error occurred during processing", issueId);
         
-        await emitResponse(
-          `${sessionId}-error`,
-          errorResponse,
-          commentData.issue.id,
-          commentData.id
-        );
-      } catch (emitError) {
-        console.error('❌ Failed to send error response:', emitError);
+        // Try to send error response to Linear
+        try {
+          const errorResponse = ErrorHandler.createErrorResponse(error, 'Agent Response');
+          
+          await emitResponse(
+            `${sessionId}-error`,
+            errorResponse,
+            issueId,
+            commentData.id
+          );
+        } catch (emitError) {
+          console.error('❌ Failed to send error response:', emitError);
+        }
       }
     }
   }

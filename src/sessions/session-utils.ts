@@ -8,7 +8,7 @@
  */
 
 import { OpenCodeSessionManager, OpenCodeSession, SessionContext } from '../sessions/opencode-session-manager';
-import { CommentData } from '../webhooks/handlers/comment-handler';
+import { Comment } from '@linear/sdk';
 
 /**
  * Consolidated session utilities for consistent session management
@@ -44,18 +44,21 @@ export class SessionUtils {
    * Extract session context from comment data
    * Single source of truth for context extraction
    */
-  static extractSessionContext(commentData: CommentData): SessionContext | null {
+static async extractSessionContext(commentData: Comment): Promise<SessionContext | null> {
     try {
       if (!commentData.issue || !commentData.user) {
         return null;
       }
 
+      const issue = await commentData.issue;
+      const user = await commentData.user;
+
       return {
-        issueId: commentData.issue.id,
-        issueTitle: commentData.issue.title,
+        issueId: issue.id,
+        issueTitle: issue.title,
         issueDescription: '', // Would need additional API call to get description
-        userId: commentData.user.id,
-        userName: commentData.user.name,
+        userId: user.id,
+        userName: user.name,
         teamId: '', // Would need additional API call to get team ID
         commentId: commentData.id,
         mentionText: commentData.body,

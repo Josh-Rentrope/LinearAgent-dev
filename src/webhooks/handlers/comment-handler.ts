@@ -5,30 +5,16 @@
  * Processes comment creation, updates, and threaded reply logic.
  */
 
-import { LinearClient } from '@linear/sdk';
+import { LinearClient, Comment } from '@linear/sdk';
 import { SessionContext } from '../../sessions/opencode-session-manager';
 
-export interface CommentData {
-  id: string;
-  body: string;
-  parentId?: string;
-  issue: {
-    id: string;
-    identifier: string;
-    title: string;
-  };
-  user: {
-    id: string;
-    name: string;
-  };
-  createdAt?: string;
-  updatedAt?: string;
-}
+// CommentData replaced with Linear SDK Comment type
+// Use: import { Comment } from '@linear/sdk'
 
 export interface CommentEvent {
   type: 'Comment';
   action: 'create' | 'update' | 'delete';
-  data: CommentData;
+  data: Comment;
   webhookId: string;
 }
 
@@ -51,7 +37,7 @@ export async function handleCommentEvent(
     }
     
     // Skip if comment is from the agent itself
-    if (event.data.user?.id === agentUserId) {
+    if ((await event.data.user)?.id === agentUserId) {
       console.log(`⏭️  Skipping own comment ${event.data.id}`);
       return;
     }
@@ -80,7 +66,7 @@ export async function handleCommentEvent(
  * Extract session context from comment data
  * @deprecated Use SessionUtils.extractSessionContext instead
  */
-export function extractSessionContext(commentData: CommentData): SessionContext {
+export function extractSessionContext(commentData: Comment): SessionContext {
   // Import dynamically to avoid circular dependency
   const { SessionUtils } = require('../../sessions/session-utils');
   return SessionUtils.extractSessionContext(commentData);
@@ -101,7 +87,7 @@ export function isAgentMentioned(commentBody: string, agentName: string): boolea
  * @deprecated Use AgentDetection.isReplyToAgent instead
  */
 export async function checkIfReplyToAgent(
-  commentData: CommentData,
+  commentData: Comment,
   linearClient: LinearClient,
   agentUserId: string
 ): Promise<boolean> {
