@@ -17,7 +17,7 @@ import OpenCodeSessionManager, { SessionContext, OpenCodeSession } from '../sess
 import { todoManager } from '../todos/todo-manager';
 import { handleAgentSessionEvent, AgentSessionEvent, updateAgentSessionProgress } from './handlers/agent-session-handler';
 //getAgentSessionStatus
-import { handleCommentEvent, CommentEvent } from './handlers/comment-handler';
+import { handleCommentEvent } from './handlers/comment-handler';
 import { SessionUtils } from '../sessions/session-utils';
 import { AgentDetection } from './utils/agent-detection';
 import { ErrorHandler } from '../utils/error-handler';
@@ -27,7 +27,6 @@ class LinearAgentWebhookServer {
   private linearClient: LinearClient | undefined | null= null;
   private agentUserId: string | null = null;
   private agentName: string;
-  private processedComments = new Set<string>();
   private sessionManager: OpenCodeSessionManager;
   
   constructor() {
@@ -286,38 +285,18 @@ class LinearAgentWebhookServer {
         return;
       }
 
-      console.log(`📝 Processing comment ${commentData.id}:`, {
-        hasBody: !!commentData.body,
-        hasUser: !!commentData.user,
-        hasIssue: !!commentData.issue,
-        bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
-      });
-      
-      // Skip if we've already processed this comment
-      if (this.processedComments.has(commentData.id)) {
-        console.log(`⏭️  Already processed comment ${commentData.id}, skipping`);
-        res.json({ received: true });
-        return;
-      }
+      // Immediately acknowledge webhook to prevent Linear timeout
+      res.json({ received: true, processing: true });
 
-      // Mark as processed to prevent duplicates
-      this.processedComments.add(commentData.id);
-
-      // Create CommentEvent object
-      const commentEvent: CommentEvent = {
-        type: 'Comment',
-        action: event.action || 'create',
-        data: commentData,
-        webhookId: event.webhookId
-      };
-
-      // Route to comment handler
+// Route to comment handler with flexible event structure
       if (this.linearClient && this.agentUserId) {
-        await handleCommentEvent(commentEvent, this.linearClient, this.agentUserId, this.agentName);
+        await handleCommentEvent(event, this.linearClient, this.agentUserId, this.agentName);
       }
 
-      // Continue with existing comment processing logic
-      await this.processCommentEvent(commentData, res);
+// Continue with existing comment processing logic
+      this.processAgentResponse(event.data).catch(error => {
+        console.error('❌ Async agent response processing failed from Comment Webhook:', error);
+      });
 
     } catch (error) {
       ErrorHandler.handleWebhookError(error, event.webhookId, 'Comment');
@@ -329,70 +308,32 @@ class LinearAgentWebhookServer {
    * Handle AgentSession webhook events
    */
   private async handleAgentSessionWebhook(event: any, res: express.Response): Promise<void> {
-    try {
-      console.log(`🔄 Processing AgentSession event: ${event.type}`);
-      console.log(event.data);
-      // Create AgentSessionEvent object
-      const agentSessionEvent: AgentSessionEvent = {
-        type: 'AppUserNotification',
-        appUserId: event.appUserId,
-        notification: event.notification,
-        webhookId: event.webhookId
-      };
-
-      // Route to agent session handler and integrate with session manager
-      if (this.linearClient) {
-        await handleAgentSessionEvent(agentSessionEvent, this.linearClient);
-        
-        // Integrate AgentSessionEvent data with existing sessions
-        await this.integrateAgentSessionEvent(agentSessionEvent);
-      }
-
-      console.log(`✅ AgentSession event processed successfully`);
-      res.json({ received: true });
-
-    } catch (error) {
-      ErrorHandler.handleWebhookError(error, event.webhookId, 'AgentSession');
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  }
-
-  /**
-   * Process comment event with consolidated logic
-   */
-private async processCommentEvent(commentData: Comment, res: express.Response): Promise<void> {
-    // Skip if comment is from the agent itself
-    const user = await commentData.user;
-    if (user?.id === this.agentUserId) {
-      console.log(`⏭️  Skipping own comment ${commentData.id}`);
-      res.json({ received: true });
-      return;
-    }
-
-    // Use consolidated agent detection
-    const shouldProcess = await AgentDetection.shouldProcessComment(
-      commentData,
-      this.agentName,
-      this.linearClient!,
-      this.agentUserId!
-    );
-
-    if (!shouldProcess.shouldProcess) {
-      console.log(`⏭️  ${shouldProcess.reason} in comment ${commentData.id}`);
-      res.json({ received: true });
-      return;
-    }
-
-    const commentUser = await commentData.user;
-    console.log(`🎯 ${shouldProcess.reason} in comment ${commentData.id} by ${commentUser?.name || 'Unknown User'}`);
-
-    // Immediately acknowledge webhook to prevent Linear timeout
-    res.json({ received: true, processing: true });
-
-    // Process response asynchronously to avoid blocking webhook acknowledgment
-    this.processAgentResponse(commentData).catch(error => {
-      console.error('❌ Async response processing failed:', error);
-    });
+     try {
+       console.log(`🔄 Processing AgentSession event: ${event.action}`);
+ 
+       // Immediately acknowledge the webhook to prevent timeouts
+       res.json({ received: true, processing: true });
+ 
+       // The actual comment data is nested inside the notification object for these events
+       const commentData = event.notification?.comment;
+ 
+       if (!commentData) {
+         console.log('⏭️ AgentSession event does not contain comment data, skipping response processing.');
+         return;
+       }
+ 
+       // Add fields expected by processAgentResponse
+       commentData.user = async () => event.notification?.actor;
+       commentData.issue = async () => event.notification?.issue;
+ 
+       // Asynchronously process the agent response
+       this.processAgentResponse(commentData).catch(error => {
+         console.error('❌ Async agent session response processing failed:', error);
+       });
+     } catch (error) {
+       ErrorHandler.handleWebhookError(error, event.webhookId, 'AgentSession');
+       // Acknowledgment already sent, so we just log the error.
+     }
   }
 
   /**
@@ -427,13 +368,13 @@ private async processCommentEvent(commentData: Comment, res: express.Response): 
         return;
       }
 
-      console.log(`📥 Webhook event details:`, {
-        action: event.action,
-        type: event.type,
-        hasData: !!event.data,
-        dataType: event.data?.type,
-        url: event.url
-      });
+      // console.log(`📥 Webhook event details:`, {
+      //   action: event.action,
+      //   type: event.type,
+      //   hasData: !!event.data,
+      //   dataType: event.data?.type,
+      //   url: event.url
+      // });
 
       // Route events to appropriate handlers
       await this.routeEvent(event);
@@ -448,11 +389,36 @@ private async processCommentEvent(commentData: Comment, res: express.Response): 
   /**
    * Process agent response asynchronously with streaming progress and timeout handling
    */
-private async processAgentResponse(commentData: Comment): Promise<void> {
+private async processAgentResponse(commentData: any): Promise<void> {
     const sessionId = `webhook-${commentData.id}`;
     let session: OpenCodeSession | null = null;
     
     try {
+      console.log(`📝 Processing comment ${commentData.id}:`, {
+        hasBody: !!commentData.body,
+        hasUser: !!commentData.user,
+        hasIssue: !!commentData.issue,
+        bodyPreview: commentData.body?.substring(0, 100) + (commentData.body?.length > 100 ? '...' : '')
+      });
+
+      // Skip if comment is from the agent itself
+      const commentUser = await commentData.user;
+      if (commentUser?.id === this.agentUserId) {
+        console.log(`⏭️  Skipping own comment ${commentData.id}`);
+        return;
+      }
+
+      // Use consolidated agent detection to see if we should process this comment
+      const shouldProcess = await AgentDetection.shouldProcessComment(
+        commentData, this.agentName, this.linearClient!, this.agentUserId!
+      );
+
+      if (!shouldProcess.shouldProcess) {
+        console.log(`⏭️  ${shouldProcess.reason} in comment ${commentData.id}`);
+        return;
+      }
+      console.log(`🎯 ${shouldProcess.reason} in comment ${commentData.id} by ${commentUser?.name || 'Unknown User'}`);
+
       // Get issue data from LinearFetch
       const issue = await commentData.issue;
       if (!issue) {

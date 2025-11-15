@@ -8,36 +8,44 @@
 import { LinearClient, Comment } from '@linear/sdk';
 import { SessionContext } from '../../sessions/opencode-session-manager';
 
-// CommentData replaced with Linear SDK Comment type
-// Use: import { Comment } from '@linear/sdk'
+// WebhookPayload using any type for flexibility with diverse Linear webhook structures
+// Use: handler.on("Comment", async (payload) => { ... })
 
-export interface CommentEvent {
-  type: 'Comment';
+export interface WebhookPayload {
   action: 'create' | 'update' | 'delete';
-  data: Comment;
+  data: any; // Flexible to handle various webhook data structures
   webhookId: string;
+  url?: string;
+  createdAt: string;
 }
 
 /**
  * Handle Comment events from Linear webhooks
  */
 export async function handleCommentEvent(
-  event: CommentEvent,
+  event: any, // Flexible to handle diverse Linear webhook structures
   linearClient: LinearClient,
   agentUserId: string,
   agentName: string
 ): Promise<void> {
-  console.log(`💬 Processing Comment ${event.action}: ${event.data.id}`);
+  console.log(`💬 Processing Comment ${event.action}: ${event.data?.id || 'unknown'}`);
   
   try {
-    // Only process creation events for agent responses
-    if (event.action !== 'create') {
-      console.log(`⏭️  Skipping ${event.action} event for comment ${event.data.id}`);
-      return;
-    }
+    // Validate event structure
+  if (!event.data || typeof event.data !== 'object') {
+    console.log(`⏭️  Invalid event data structure for ${event.action}`);
+    return;
+  }
+
+  // Only process creation events for agent responses
+  if (event.action !== 'create') {
+    console.log(`⏭️  Skipping ${event.action} event for comment ${event.data.id}`);
+    return;
+  }
     
     // Skip if comment is from the agent itself
-    if ((await event.data.user)?.id === agentUserId) {
+    const commentUser = await event.data.user;
+    if (commentUser?.id === agentUserId) {
       console.log(`⏭️  Skipping own comment ${event.data.id}`);
       return;
     }
@@ -66,7 +74,7 @@ export async function handleCommentEvent(
  * Extract session context from comment data
  * @deprecated Use SessionUtils.extractSessionContext instead
  */
-export function extractSessionContext(commentData: Comment): SessionContext {
+export function extractSessionContext(commentData: any): SessionContext {
   // Import dynamically to avoid circular dependency
   const { SessionUtils } = require('../../sessions/session-utils');
   return SessionUtils.extractSessionContext(commentData);
@@ -87,7 +95,7 @@ export function isAgentMentioned(commentBody: string, agentName: string): boolea
  * @deprecated Use AgentDetection.isReplyToAgent instead
  */
 export async function checkIfReplyToAgent(
-  commentData: Comment,
+  commentData: any, // Flexible to handle various webhook data structures
   linearClient: LinearClient,
   agentUserId: string
 ): Promise<boolean> {

@@ -29,7 +29,6 @@ const mockLinearClient = new LinearClient({ apiKey: 'test-key' });
 describe('Duplicate Response Prevention', () => {
   test('should not respond to own comments', async () => {
     const ownCommentEvent = {
-      type: 'Comment' as const,
       action: 'create' as const,
       data: {
         id: 'comment-123',
@@ -46,7 +45,8 @@ describe('Duplicate Response Prevention', () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
-      webhookId: 'webhook-123'
+      webhookId: 'webhook-123',
+      createdAt: new Date().toISOString()
     };
 
     // Should not throw and should not create response
@@ -55,7 +55,6 @@ describe('Duplicate Response Prevention', () => {
 
   test('should respond to user comments that mention agent', async () => {
     const userCommentEvent = {
-      type: 'Comment' as const,
       action: 'create' as const,
       data: {
         id: 'comment-456',
@@ -72,7 +71,8 @@ describe('Duplicate Response Prevention', () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
-      webhookId: 'webhook-123'
+      webhookId: 'webhook-123',
+      createdAt: new Date().toISOString()
     };
 
     // Should not throw and should create response
