@@ -65,6 +65,7 @@ export interface ElicitationContext {
 export class OpenCodeSessionManager {
   public sessions = new Map<string, OpenCodeSession>()
   private cleanupInterval: NodeJS.Timeout | null = null
+  private processingComments = new Set<string>();
 
   constructor() {
     this.startCleanupInterval()
@@ -126,6 +127,25 @@ export class OpenCodeSessionManager {
     return this.sessions.get(sessionId) || null
   }
 
+  /**
+   * Check if a comment is currently being processed to prevent race conditions.
+   */
+  isProcessing(commentId: string): boolean {
+    return this.processingComments.has(commentId);
+  }
+
+  /**
+   * Set the processing status for a comment.
+   * @param commentId The ID of the comment.
+   * @param status The processing status (true for processing, false for done).
+   */
+  setProcessingStatus(commentId: string, status: boolean): void {
+    if (status) {
+      this.processingComments.add(commentId);
+    } else {
+      this.processingComments.delete(commentId);
+    }
+  }
   /**
    * Update session status
   
