@@ -4,6 +4,7 @@
 
 import { handleAgentSessionEvent } from '../src/webhooks/handlers/agent-session-handler';
 import { handleCommentEvent } from '../src/webhooks/handlers/comment-handler';
+import { LinearClient } from '@linear/sdk';
 
 // Mock environment variables
 process.env.LINEAR_API_KEY = 'test-key';
@@ -22,48 +23,65 @@ jest.mock('@linear/sdk', () => ({
   }))
 }));
 
+// Create mock Linear client for tests
+const mockLinearClient = new LinearClient({ apiKey: 'test-key' });
+
 describe('Duplicate Response Prevention', () => {
   test('should not respond to own comments', async () => {
     const ownCommentEvent = {
-      type: 'Comment',
-      action: 'create',
+      action: 'create' as const,
       data: {
         id: 'comment-123',
         body: 'This is my own comment',
-        userId: 'agent-user-123', // Same as agent user ID
-        issueId: 'issue-123',
+        issue: {
+          id: 'issue-123',
+          identifier: 'TEST-123',
+          title: 'Test Issue'
+        },
+        user: {
+          id: 'agent-user-123',
+          name: 'OpenCode Agent'
+        },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
-      webhookId: 'webhook-123'
+      webhookId: 'webhook-123',
+      createdAt: new Date().toISOString()
     };
 
     // Should not throw and should not create response
-    await expect(handleCommentEvent(ownCommentEvent)).resolves.not.toThrow();
+    await expect(handleCommentEvent(ownCommentEvent, mockLinearClient, 'agent-user-123', 'OpenCode Agent')).resolves.not.toThrow();
   });
 
   test('should respond to user comments that mention agent', async () => {
     const userCommentEvent = {
-      type: 'Comment',
-      action: 'create',
+      action: 'create' as const,
       data: {
         id: 'comment-456',
         body: '@OpenCode Agent please help me',
-        userId: 'user-456', // Different from agent user ID
-        issueId: 'issue-123',
+        issue: {
+          id: 'issue-123',
+          identifier: 'TEST-123',
+          title: 'Test Issue'
+        },
+        user: {
+          id: 'user-456',
+          name: 'Test User'
+        },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
-      webhookId: 'webhook-123'
+      webhookId: 'webhook-123',
+      createdAt: new Date().toISOString()
     };
 
     // Should not throw and should create response
-    await expect(handleCommentEvent(userCommentEvent)).resolves.not.toThrow();
+    await expect(handleCommentEvent(userCommentEvent, mockLinearClient, 'agent-user-123', 'OpenCode Agent')).resolves.not.toThrow();
   });
 
   test('should handle AppUserNotification events properly', async () => {
     const notificationEvent = {
-      type: 'AppUserNotification',
+      type: 'AppUserNotification' as const,
       appUserId: 'app-user-123',
       notification: {
         type: 'issueCommentMention',
@@ -73,12 +91,12 @@ describe('Duplicate Response Prevention', () => {
           userId: 'user-789',
           issueId: 'issue-123'
         },
-        parentCommentId: undefined
+        parentCommentId: ''
       },
       webhookId: 'webhook-123'
     };
 
     // Should not throw
-    await expect(handleAgentSessionEvent(notificationEvent)).resolves.not.toThrow();
+    await expect(handleAgentSessionEvent(notificationEvent, mockLinearClient)).resolves.not.toThrow();
   });
 });

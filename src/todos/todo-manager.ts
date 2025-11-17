@@ -3,7 +3,11 @@
  * 
  * Manages TODO items created during agent sessions
  * and links them to Linear issues for tracking.
+ * 
+ * Refactored for JOS-158 to improve error handling and maintainability.
  */
+
+import { ErrorHandler } from '../utils/error-handler';
 
 
 
@@ -163,7 +167,11 @@ export class TodoManager {
       // todo.linearIssueId = issue.id;
       
     } catch (error) {
+<<<<<<< HEAD
+      ErrorHandler.handleSessionError(error, todoId, 'TODO Linear Issue Creation');
+=======
       console.error(`❌ Failed to create Linear issue for TODO ${todoId}:`, error);
+>>>>>>> 99728c8ef69bcfd9270c4ecb60a34f8799992b7e
     }
   }
 

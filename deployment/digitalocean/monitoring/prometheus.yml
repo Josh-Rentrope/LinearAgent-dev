@@ -1,0 +1,48 @@
+# Monitoring Configuration for Prometheus
+# Copy this to monitoring/prometheus.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # LinearAgent application
+  - job_name: 'linear-agent'
+    static_configs:
+      - targets: ['linear-agent:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Redis metrics (if redis_exporter is available)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  # Nginx metrics (if nginx_exporter is available)
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:80']
+    metrics_path: '/nginx_metrics'
+    scrape_interval: 30s
+
+  # Node Exporter (for system metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093

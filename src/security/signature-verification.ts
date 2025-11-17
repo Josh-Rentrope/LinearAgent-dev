@@ -66,27 +66,31 @@ export function extractLinearSignature(headers: Record<string, string>): string 
 /**
  * Middleware for Express.js to verify Linear webhooks
  */
-export function linearWebhookMiddleware(req: any, _res: any, next: any) {
+export function linearWebhookMiddleware(req: any, res: any, next: any) {
+  // Check if signature verification is disabled
+  const enableSignatureVerification = process.env.ENABLE_SIGNATURE_VERIFICATION !== 'false';
+  
+  if (!enableSignatureVerification) {
+    console.log('⚠️  Signature verification disabled - proceeding without verification');
+    return next();
+  }
+  
   const signature = extractLinearSignature(req.headers);
   
-  // TEMPORARILY SKIP SIGNATURE VERIFICATION FOR TESTING
-  console.log('⚠️  Signature verification TEMPORARILY DISABLED for testing');
-  console.log(`📥 Incoming signature: ${signature}`);
-  
-  // TEMPORARY: Skip signature check
-  /*
   if (!signature) {
     console.warn('Missing Linear signature header');
     return res.status(401).json({ error: 'Missing signature' });
   }
   
+  // Get the raw request body for signature verification
+  const payload = JSON.stringify(req.body);
+  
   if (!verifyLinearSignature(payload, signature)) {
     console.warn('Invalid Linear signature');
     return res.status(401).json({ error: 'Invalid signature' });
   }
-  */
   
-  // Proceed without signature verification for testing
+  console.log(`🔐 Signature verification successful`);
   next();
 }
 

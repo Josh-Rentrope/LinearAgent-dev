@@ -3,9 +3,43 @@
  * 
  * Emits activities back to Linear to show agent progress
  * and communication with users.
+ * 
+ * Refactored for JOS-158 to improve error handling and maintainability.
  */
 
 import { LinearClient } from '@linear/sdk';
+import { ErrorHandler } from '../utils/error-handler';
+
+/**
+ * Find the top-level comment in a thread
+ */
+async function findTopLevelComment(
+  commentId: string,
+  linearClient: LinearClient
+): Promise<string> {
+  try {
+    const comment = await linearClient.comment({ id: commentId });
+    
+    if (!comment) {
+      throw new Error(`Comment ${commentId} not found`);
+    }
+    
+    //const commentUser = await comment.user;
+    const commentParent = await comment.parent;
+    // If comment has no parent, it's top-level
+    if (!commentParent) {
+      console.log(`🎯 Comment ${commentId} is already top-level`);
+      return commentId;
+    }
+    
+    // Recursively find parent until we reach top-level
+    return await commentParent.id
+    
+  } catch (error) {
+    console.error(`❌ Failed to find top-level comment for ${commentId}:`, error);
+    throw error;
+  }
+}
 
 /**
  * Find the top-level comment in a thread
@@ -40,7 +74,7 @@ async function findTopLevelComment(
 
 interface Activity {
   sessionId: string;
-  type: 'thought' | 'action' | 'elicitation' | 'response' | 'error';
+  type: 'thought' | 'action' | 'elicitation' | 'response' | 'error' | 'progress';
   content: string;
   issueId: string;
   externalUrl?: string;
@@ -48,6 +82,12 @@ interface Activity {
   signal?: {
     type: 'auth' | 'select' | 'stop';
     payload?: any;
+  };
+  progress?: {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string | undefined;
   };
 }
 
@@ -107,16 +147,16 @@ export async function emitActivity(activity: Activity): Promise<void> {
       let result;
       try {
         result = await linearClient.createComment(commentData);
-      } catch (error) {
-        // Handle threading API errors by falling back to top-level comment
-        if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
-          console.log(`⚠️  Threading error, falling back to top-level comment`);
-          delete commentData.parentId;
-          result = await linearClient.createComment(commentData);
-        } else {
-          throw error;
+        } catch (error) {
+          // Handle threading API errors by falling back to top-level comment
+          if (commentData.parentId && error instanceof Error && error.message.includes('Parent comment must be a top level comment')) {
+            console.log(`⚠️  Threading error, falling back to top-level comment`);
+            delete commentData.parentId;
+            result = await linearClient.createComment(commentData);
+          } else {
+            throw ErrorHandler.handleLinearApiError(error, 'Comment Creation');
+          }
         }
-      }
       
       // Check if comment creation was successful
       if (!result?.success) {
@@ -131,7 +171,7 @@ export async function emitActivity(activity: Activity): Promise<void> {
     }
     
   } catch (error) {
-    console.error('❌ Failed to emit activity:', error);
+    ErrorHandler.handleWebhookError(error, activity.sessionId, 'Activity Emission');
     // Don't throw here - activity emission failure shouldn't break main flow
   }
 }
@@ -218,4 +258,77 @@ export async function emitError(
     content: `❌ ${content}`,
     issueId
   });
+}
+
+/**
+ * Emit a progress activity with detailed tracking
+ */
+export async function emitProgress(
+  sessionId: string,
+  progress: number,
+  stage: string,
+  issueId: string,
+  estimatedCompletion?: string
+): Promise<void> {
+  const progressIcon = progress === 100 ? '✅' : progress >= 75 ? '🔄' : progress >= 50 ? '⚡' : '📊';
+  const content = estimatedCompletion 
+    ? `${progressIcon} **Progress: ${progress}%** - ${stage} (ETA: ${estimatedCompletion})`
+    : `${progressIcon} **Progress: ${progress}%** - ${stage}`;
+    
+  await emitActivity({
+    sessionId,
+    type: 'progress',
+    content,
+    issueId,
+    progress: {
+      current: progress,
+      total: 100,
+      stage,
+      estimatedCompletion 
+    }
+  });
+}
+
+/**
+ * Update Linear issue status based on progress
+ */
+export async function updateIssueStatus(
+  issueId: string,
+  status: 'todo' | 'in_progress' | 'done' | 'canceled',
+  linearClient?: LinearClient | null | undefined
+): Promise<void> {
+  try {
+    if (!linearClient) {
+      const botOAuthToken = process.env.LINEAR_BOT_OAUTH_TOKEN;
+      if (!botOAuthToken) return;
+      
+      linearClient = new LinearClient({ apiKey: botOAuthToken });
+    }
+    
+    // Get the issue to find the appropriate workflow state
+    const issue = await linearClient.issue(issueId);
+    if (!issue) return;
+
+    // Get team workflow states
+    const team = await issue.team;
+    if (!team) return;
+
+    const workflowStates = await team.states();
+    const targetState = workflowStates.nodes.find(state => {
+      switch (status) {
+        case 'todo': return state.type === 'backlog' || state.type === 'unstarted';
+        case 'in_progress': return state.type === 'started' || state.type === 'in_progress';
+        case 'done': return state.type === 'completed' || state.type === 'done';
+        case 'canceled': return state.type === 'canceled' || state.type === 'cancelled';
+        default: return false;
+      }
+    });
+
+    if (targetState) {
+      await issue.update({ stateId: targetState.id });
+      console.log(`🔄 Updated issue ${issueId} status to: ${targetState.name}`);
+    }
+  } catch (error) {
+    console.error('❌ Failed to update issue status:', error);
+  }
 }

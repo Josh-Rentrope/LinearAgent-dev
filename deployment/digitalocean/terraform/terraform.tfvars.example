@@ -1,0 +1,24 @@
+# Example terraform.tfvars file
+# Copy this file and update with your values
+
+# DigitalOcean Configuration
+do_token = "your_digitalocean_api_token_here"
+
+# SSH Configuration
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... your-email@example.com"
+
+# Domain Configuration
+domain_name = "linear-agent.yourdomain.com"
+letsencrypt_email = "admin@yourdomain.com"
+
+# Cloudflare Configuration (optional)
+# use_cloudflare = true
+# cloudflare_api_token = "your_cloudflare_api_token"
+# cloudflare_zone_id = "your_cloudflare_zone_id"
+
+# Region and Size
+region = "nyc3"
+droplet_size = "s-2vcpu-4gb"
+
+# Monitoring
+monitoring_ips = ["0.0.0.0/0"]

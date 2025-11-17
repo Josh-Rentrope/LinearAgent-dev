@@ -17,6 +17,10 @@ jest.mock('../src/activities/activity-emitter');
 import { openCodeClient } from '../src/integrations/opencode-client';
 import { emitResponse } from '../src/activities/activity-emitter';
 
+// Type casting for mocked functions
+const mockOpenCodeClient = openCodeClient as jest.Mocked<typeof openCodeClient>;
+const mockEmitResponse = emitResponse as jest.MockedFunction<typeof emitResponse>;
+
 // Mock environment variables
 const originalEnv = process.env;
 
@@ -40,21 +44,29 @@ describe('Session Integration Tests', () => {
     SessionConfiguration.reset();
     
     // Mock OpenCode client
-    (openCodeClient.isSessionEnabled as jest.Mock).mockReturnValue(true);
-    (openCodeClient.createSession as jest.Mock).mockResolvedValue({
-      sessionId: 'test-opencode-session-123',
+    mockOpenCodeClient.isSessionEnabled.mockReturnValue(true);
+    mockOpenCodeClient.createSession.mockResolvedValue({
+      id: 'test-opencode-session-123',
+      projectID: 'test-project',
+      directory: '/test',
+      title: 'Test Session',
+      version: '1.0.0',
+      time: {
+        created: Date.now(),
+        updated: Date.now()
+      },
       status: 'created',
       url: 'https://opencode.dev/sessions/test-opencode-session-123'
-    });
-    (openCodeClient.generateSessionResponse as jest.Mock).mockResolvedValue(
+    } as any);
+    mockOpenCodeClient.generateSessionResponse.mockResolvedValue(
       'This is a test session response'
     );
-    (openCodeClient.generateLinearResponse as jest.Mock).mockResolvedValue(
+    mockOpenCodeClient.generateLinearResponse.mockResolvedValue(
       'This is a test regular response'
     );
     
     // Mock emitResponse
-    (emitResponse as jest.Mock).mockResolvedValue(undefined);
+    mockEmitResponse.mockResolvedValue(undefined);
     
     server = new LinearAgentWebhookServer();
     
@@ -232,7 +244,7 @@ describe('Session Integration Tests', () => {
   describe('Session Error Handling', () => {
     it('should fallback to regular response when session creation fails', async () => {
       // Mock session creation failure
-      (openCodeClient.createSession as jest.Mock).mockRejectedValueOnce(
+      mockOpenCodeClient.createSession.mockRejectedValueOnce(
         new Error('Session API unavailable')
       );
 
@@ -254,14 +266,14 @@ describe('Session Integration Tests', () => {
         createdAt: '2025-11-09T20:00:00Z'
       };
 
-      const response = await request(app)
+      await request(app)
         .post('/webhooks/linear-agent')
         .send(webhookPayload)
         .expect(200);
 
-      expect(openCodeClient.createSession).toHaveBeenCalled();
-      expect(openCodeClient.generateLinearResponse).toHaveBeenCalled();
-      expect(emitResponse).toHaveBeenCalled();
+      expect(mockOpenCodeClient.createSession).toHaveBeenCalled();
+      expect(mockOpenCodeClient.generateLinearResponse).toHaveBeenCalled();
+      expect(mockEmitResponse).toHaveBeenCalled();
     });
 
     it('should handle missing session token gracefully', async () => {
@@ -286,13 +298,13 @@ describe('Session Integration Tests', () => {
         createdAt: '2025-11-09T20:00:00Z'
       };
 
-      const response = await request(app)
+      await request(app)
         .post('/webhooks/linear-agent')
         .send(webhookPayload)
         .expect(200);
 
-      expect(openCodeClient.createSession).not.toHaveBeenCalled();
-      expect(openCodeClient.generateLinearResponse).toHaveBeenCalled();
+      expect(mockOpenCodeClient.createSession).not.toHaveBeenCalled();
+      expect(mockOpenCodeClient.generateLinearResponse).toHaveBeenCalled();
     });
   });
 

@@ -5,53 +5,47 @@
  * Processes comment creation, updates, and threaded reply logic.
  */
 
-import { LinearClient } from '@linear/sdk';
+import { LinearClient, Comment } from '@linear/sdk';
 import { SessionContext } from '../../sessions/opencode-session-manager';
 
-export interface CommentData {
-  id: string;
-  body: string;
-  parentId?: string;
-  issue: {
-    id: string;
-    identifier: string;
-    title: string;
-  };
-  user: {
-    id: string;
-    name: string;
-  };
-  createdAt?: string;
-  updatedAt?: string;
-}
+// WebhookPayload using any type for flexibility with diverse Linear webhook structures
+// Use: handler.on("Comment", async (payload) => { ... })
 
-export interface CommentEvent {
-  type: 'Comment';
+export interface WebhookPayload {
   action: 'create' | 'update' | 'delete';
-  data: CommentData;
+  data: any; // Flexible to handle various webhook data structures
   webhookId: string;
+  url?: string;
+  createdAt: string;
 }
 
 /**
  * Handle Comment events from Linear webhooks
  */
 export async function handleCommentEvent(
-  event: CommentEvent,
+  event: any, // Flexible to handle diverse Linear webhook structures
   linearClient: LinearClient,
   agentUserId: string,
   agentName: string
 ): Promise<void> {
-  console.log(`💬 Processing Comment ${event.action}: ${event.data.id}`);
+  console.log(`💬 Processing Comment ${event.action}: ${event.data?.id || 'unknown'}`);
   
   try {
-    // Only process creation events for agent responses
-    if (event.action !== 'create') {
-      console.log(`⏭️  Skipping ${event.action} event for comment ${event.data.id}`);
-      return;
-    }
+    // Validate event structure
+  if (!event.data || typeof event.data !== 'object') {
+    console.log(`⏭️  Invalid event data structure for ${event.action}`);
+    return;
+  }
+
+  // Only process creation events for agent responses
+  if (event.action !== 'create') {
+    console.log(`⏭️  Skipping ${event.action} event for comment ${event.data.id}`);
+    return;
+  }
     
     // Skip if comment is from the agent itself
-    if (event.data.user?.id === agentUserId) {
+    const commentUser = await event.data.user;
+    if (commentUser?.id === agentUserId) {
       console.log(`⏭️  Skipping own comment ${event.data.id}`);
       return;
     }
@@ -78,78 +72,34 @@ export async function handleCommentEvent(
 
 /**
  * Extract session context from comment data
+ * @deprecated Use SessionUtils.extractSessionContext instead
  */
-export function extractSessionContext(commentData: CommentData): SessionContext {
-  return {
-    userId: commentData.user.id,
-    userName: commentData.user.name,
-    issueId: commentData.issue.id,
-    issueTitle: commentData.issue.title,
-    issueDescription: '', // Will be populated if needed
-    teamId: '', // Will be populated if needed
-    commentId: commentData.id,
-    mentionText: commentData.body || '',
-    createdAt: commentData.createdAt || new Date().toISOString()
-  };
+export function extractSessionContext(commentData: any): SessionContext {
+  // Import dynamically to avoid circular dependency
+  const { SessionUtils } = require('../../sessions/session-utils');
+  return SessionUtils.extractSessionContext(commentData);
 }
 
 /**
  * Check if comment mentions the agent
+ * @deprecated Use AgentDetection.isAgentMentioned instead
  */
 export function isAgentMentioned(commentBody: string, agentName: string): boolean {
-  if (!commentBody) return false;
-  
-  const mentionPatterns = [
-    `@${agentName}`,
-    `@${agentName.replace(/\s+/g, '')}`,
-    `@${agentName.replace(/\s+/g, '').toLowerCase()}`,
-    '@opencodeintegration',
-    '@opencodeagent',
-    'opencode integration',
-    'opencode agent'
-  ];
-  
-  return mentionPatterns.some(pattern => 
-    commentBody.toLowerCase().includes(pattern.toLowerCase())
-  );
+  // Import dynamically to avoid circular dependency
+  const { AgentDetection } = require('../utils/agent-detection');
+  return AgentDetection.isAgentMentioned(commentBody, agentName);
 }
 
 /**
  * Check if comment is a reply to an agent comment
- * Simplified logic: if comment has a parent, check if parent is from agent
+ * @deprecated Use AgentDetection.isReplyToAgent instead
  */
 export async function checkIfReplyToAgent(
-  commentData: CommentData,
+  commentData: any, // Flexible to handle various webhook data structures
   linearClient: LinearClient,
   agentUserId: string
 ): Promise<boolean> {
-  // Check if comment has a parent (is a reply in a thread)
-  if (!commentData.parentId) {
-    return false;
-  }
-  
-  try {
-    // Get the parent comment directly
-    const parentComment = await linearClient.comment({ id: commentData.parentId });
-    
-    if (!parentComment) {
-      console.log(`⚠️  Parent comment ${commentData.parentId} not found`);
-      return false;
-    }
-    
-    // Check if parent comment is from agent
-    // Note: Linear SDK wraps user data, need to handle properly
-    const parentUser = parentComment.user;
-    if (parentUser && 'id' in parentUser && parentUser.id === agentUserId) {
-      console.log(`✅ Comment ${commentData.id} is reply to agent comment ${parentComment.id}`);
-      return true;
-    }
-    
-    console.log(`📝 Parent comment ${parentComment.id} is not from agent`);
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ Failed to check reply-to-agent status for ${commentData.id}:`, error);
-    return false;
-  }
+  // Import dynamically to avoid circular dependency
+  const { AgentDetection } = require('../utils/agent-detection');
+  return AgentDetection.isReplyToAgent(commentData, linearClient, agentUserId);
 }

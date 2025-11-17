@@ -3,9 +3,12 @@
  * 
  * Handles AppUserNotification events from Linear webhooks.
  * Processes session lifecycle events and extracts elicitation context.
+ * 
+ * Refactored for JOS-158 to improve error handling and maintainability.
  */
 
 import { LinearClient } from '@linear/sdk';
+import { ErrorHandler } from '../../utils/error-handler';
 
 export interface AgentSessionEvent {
   type: 'AppUserNotification';
@@ -37,6 +40,12 @@ export interface SessionEventData {
     confidence?: number;
     contextGathered?: string[];
   };
+  progress?: {
+    current: number;
+    total: number;
+    stage: string;
+    estimatedCompletion?: string;
+  };
 }
 
 /**
@@ -44,7 +53,7 @@ export interface SessionEventData {
  */
 export async function handleAgentSessionEvent(
   event: AgentSessionEvent,
-  _linearClient: LinearClient
+  linearClient: LinearClient
 ): Promise<void> {
   console.log(`🔄 Processing AgentSessionEvent: ${event.notification.type}`);
   
@@ -71,8 +80,68 @@ export async function handleAgentSessionEvent(
     }
     
   } catch (error) {
-    console.error('❌ Failed to process AgentSessionEvent:', error);
+    ErrorHandler.handleWebhookError(error, event.webhookId, 'AgentSession Event');
     throw error;
+  }
+}
+
+/**
+ * Update AgentSession progress in Linear
+ */
+export async function updateAgentSessionProgress(
+  sessionId: string,
+  progress: number,
+  stage: string,
+  linearClient: LinearClient,
+  estimatedCompletion?: string
+): Promise<void> {
+  try {
+    console.log(`📊 Updating session progress: ${progress}% - ${stage}`);
+    
+    // Create progress activity for real-time feedback
+    const progressContent = estimatedCompletion 
+      ? `🔄 Progress: ${progress}% - ${stage} (ETA: ${estimatedCompletion})`
+      : `🔄 Progress: ${progress}% - ${stage}`;
+    
+    // This would integrate with Linear's activity system
+    // For now, log progress for debugging
+    console.log(`📈 Session Progress Update:`, {
+      sessionId,
+      progress,
+      stage,
+      estimatedCompletion,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Failed to update session progress:', error);
+  }
+}
+
+/**
+ * Get AgentSession status and metadata
+ */
+export async function getAgentSessionStatus(
+  sessionId: string,
+  linearClient: LinearClient
+): Promise<{
+    status: string;
+    progress?: number;
+    stage?: string;
+  }> {
+  try {
+    // This would query Linear's AgentSession API
+    // For now, return mock status for testing
+    return {
+      status: 'active',
+      progress: 0,
+      stage: 'initial'
+    };
+  } catch (error) {
+    console.error('❌ Failed to get session status:', error);
+    return {
+      status: 'unknown'
+    };
   }
 }
 
