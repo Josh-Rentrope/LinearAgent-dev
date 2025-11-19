@@ -41,37 +41,6 @@ async function findTopLevelComment(
   }
 }
 
-/**
- * Find the top-level comment in a thread
- */
-async function findTopLevelComment(
-  commentId: string,
-  linearClient: LinearClient
-): Promise<string> {
-  try {
-    const comment = await linearClient.comment({ id: commentId });
-    
-    if (!comment) {
-      throw new Error(`Comment ${commentId} not found`);
-    }
-    
-    //const commentUser = await comment.user;
-    const commentParent = await comment.parent;
-    // If comment has no parent, it's top-level
-    if (!commentParent) {
-      console.log(`🎯 Comment ${commentId} is already top-level`);
-      return commentId;
-    }
-    
-    // Recursively find parent until we reach top-level
-    return await commentParent.id
-    
-  } catch (error) {
-    console.error(`❌ Failed to find top-level comment for ${commentId}:`, error);
-    throw error;
-  }
-}
-
 interface Activity {
   sessionId: string;
   type: 'thought' | 'action' | 'elicitation' | 'response' | 'error' | 'progress';

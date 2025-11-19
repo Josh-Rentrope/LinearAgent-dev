@@ -195,12 +195,7 @@ export class OpenCodeClient {
 
       if (!response.ok) {
         const errorData: OpenCodeError = await response.json().catch(() => ({}));
-<<<<<<< HEAD
-        const errorMessage = `OpenCode API ${response.status}: ${errorData.errors?.[0]?.message || response.statusText}`;
-        throw new Error(errorMessage);
-=======
         throw new Error(`OpenCode API ${response.status}: ${errorData.errors?.[0]?.message || response.statusText}`);
->>>>>>> 99728c8ef69bcfd9270c4ecb60a34f8799992b7e
       }
 
       const data = await response.json();
@@ -218,11 +213,7 @@ export class OpenCodeClient {
       return await this.retryWithBackoff(operation, 'OpenCode API response generation');
     } catch (error) {
       console.error('❌ OpenCode API error after retries:', error);
-<<<<<<< HEAD
-      return ErrorHandler.createFallbackResponse(prompt, 'OpenCode API');
-=======
       return this.getFallbackResponse(prompt);
->>>>>>> 99728c8ef69bcfd9270c4ecb60a34f8799992b7e
     }
   }
 
@@ -312,12 +303,8 @@ Could you try mentioning me again in a few moments? In the meantime, feel free t
       
       // Send initial message if provided
       if (initialMessage && data.id) {
-<<<<<<< HEAD
         const enhancedMessage = `Comment started from issue ${linearContext.issueId}\n\n${initialMessage}`;
         await this.sendSessionMessage(data.id, enhancedMessage);
-=======
-        await this.sendSessionMessage(data.id, initialMessage);
->>>>>>> 99728c8ef69bcfd9270c4ecb60a34f8799992b7e
       }
 
       return data;
