@@ -264,82 +264,75 @@ class LinearAgentWebhookServer {
     }
   }
 
-  /**
-   * Handle Comment webhook events
-   */
-  private async handleCommentWebhook(event: any, res: express.Response): Promise<void> {
-    try {
-      // Check if event.data exists and has required fields
-      if (!event.data || typeof event.data !== 'object') {
-        console.log('⏭️  No event.data object, skipping');
-        res.json({ received: true });
-        return;
-      }
 
-      const commentData = event.data as Comment;
-      
-      // Validate comment data structure
-      if (!commentData.id) {
-        console.error('❌ Comment data missing required id field');
-        res.status(400).json({ error: 'Invalid comment data' });
-        return;
-      }
-
-
-// Continue with existing comment processing logic
-      this.processAgentResponse(event.data).catch(error => {
-        console.error('❌ Async agent response processing failed from Comment Webhook:', error);
-      });
-
-    } catch (error) {
-      ErrorHandler.handleWebhookError(error, event.webhookId, 'Comment');
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  }
 
   /**
-   * Handle AgentSession webhook events
+   * Handle unified webhook events (Comment, AppUserNotification, AgentSessionEvent)
    */
   private async handleAgentSessionWebhook(event: any, res: express.Response): Promise<void> {
      try {
-       console.log(`🔄 Processing AgentSession event: ${event.action} via webhook ${event.webhookId}`);
- 
-       // The actual comment data is nested inside the notification object for these events
-       const commentData = event.notification?.comment;
- 
+       console.log(`🔄 Processing webhook event: ${event.type} - ${event.action} via webhook ${event.webhookId}`);
+
+       // Extract comment data based on event type
+       let commentData: any = null;
+
+       if (event.type === 'Comment' && event.data) {
+         // Direct Comment events
+         commentData = event.data;
+       } else if (event.type === 'AppUserNotification' && event.notification?.comment) {
+         // AppUserNotification events (agent mentions)
+         commentData = event.notification.comment;
+         // Add async getters to mimic Comment object structure
+         commentData.user = async () => event.notification?.actor;
+         commentData.issue = async () => event.notification?.issue;
+       } else if (event.type === 'AgentSessionEvent' && event.agentSession?.comment) {
+         // AgentSessionEvent contains richer data
+         commentData = event.agentSession.comment;
+         // Add async getters for AgentSession events
+         commentData.user = async () => event.agentSession?.creator;
+         commentData.issue = async () => event.agentSession?.issue;
+       }
+
        if (!commentData) {
-         console.log('⏭️ AgentSession event does not contain comment data, skipping response processing.');
+         console.log('⏭️ Event does not contain comment data, skipping response processing.');
+         res.json({ received: true });
          return;
        }
- 
-       // Add async getters to mimic the structure of a regular Comment object
-       // This ensures processAgentResponse can handle both event types identically
-       commentData.user = async () => event.notification?.actor;
-       commentData.issue = async () => event.notification?.issue;
- 
+
+       // Validate comment data structure
+       if (!commentData.id) {
+         console.error('❌ Comment data missing required id field');
+         res.status(400).json({ error: 'Invalid comment data' });
+         return;
+       }
+
        // Immediately acknowledge the webhook to prevent timeouts
        res.json({ received: true, processing: true });
- 
-       // Asynchronously process the agent response
-       this.processAgentResponse(commentData).catch(error => {
-         console.error('❌ Async agent session response processing failed:', error);
-       });
+
+        // Asynchronously process the agent response
+        this.processAgentResponse(commentData, event).catch(error => {
+          console.error('❌ Async agent response processing failed:', error);
+        });
      } catch (error) {
-       ErrorHandler.handleWebhookError(error, event.webhookId, 'AgentSession');
+       ErrorHandler.handleWebhookError(error, event.webhookId, event.type || 'Webhook');
        // Acknowledgment already sent, so we just log the error.
      }
   }
 
   /**
-   * Route events to appropriate handlers
+   * Route events to unified handler
    */
   private async routeEvent(event: any): Promise<void> {
     if (event.type === 'Comment' && event.action === 'create') {
-      // Handle Comment events
-      await this.handleCommentWebhook(event, { json: () => ({}) } as express.Response);
+      // Handle direct Comment events
+      await this.handleAgentSessionWebhook(event, { json: () => ({}) } as express.Response);
       return;
     } else if (event.type === 'AppUserNotification' && event.action === 'issueCommentMention') {
       // Handle agent mention events
+      await this.handleAgentSessionWebhook(event, { json: () => ({}) } as express.Response);
+      return;
+    } else if (event.type === 'AgentSessionEvent') {
+      // Handle AgentSession events (contain richer comment + session data)
       await this.handleAgentSessionWebhook(event, { json: () => ({}) } as express.Response);
       return;
     }
@@ -382,7 +375,7 @@ class LinearAgentWebhookServer {
   /**
    * Process agent response asynchronously with streaming progress and timeout handling
    */
-private async processAgentResponse(commentData: any): Promise<void> {
+  private async processAgentResponse(commentData: any, event?: any): Promise<void> {
     const sessionId = `webhook-${commentData.id}`;
     let session: OpenCodeSession | null = null;
     
@@ -450,8 +443,8 @@ private async processAgentResponse(commentData: any): Promise<void> {
         return;
       }
 
-      // Extract session context using consolidated utility
-      const sessionContext = await SessionUtils.extractSessionContext(commentData);
+      // Extract session context using consolidated utility with enhanced SDK data
+      const sessionContext = await SessionUtils.extractSessionContext(commentData, event);
       
       if (!sessionContext) {
         // Fall back to regular response if context extraction fails

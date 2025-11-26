@@ -23,7 +23,7 @@ export class SessionUtils {
     sessionContext: SessionContext
   ): OpenCodeSession | null {
     const userSessions = Array.from(sessionManager.sessions.values())
-      .filter(session => session.linearContext.userId === sessionContext.userId)
+      .filter((session): session is OpenCodeSession => session.linearContext.userId === sessionContext.userId)
       .filter(session => session.linearContext.issueId === sessionContext.issueId);
 
     // Prioritize active sessions first
@@ -41,10 +41,10 @@ export class SessionUtils {
   }
 
   /**
-   * Extract session context from comment data
-   * Single source of truth for context extraction
+   * Extract session context from comment data or AgentSession event
+   * Single source of truth for context extraction with enhanced SDK data
    */
-static async extractSessionContext(commentData: Comment): Promise<SessionContext | null> {
+  static async extractSessionContext(commentData: Comment, event?: any): Promise<SessionContext | null> {
     try {
       if (!commentData.issue || !commentData.user) {
         return null;
@@ -53,17 +53,36 @@ static async extractSessionContext(commentData: Comment): Promise<SessionContext
       const issue = await commentData.issue;
       const user = await commentData.user;
 
-      return {
+      // Base context from comment data
+      const baseContext: SessionContext = {
         issueId: issue.id,
         issueTitle: issue.title,
-        issueDescription: '', // Would need additional API call to get description
+        issueDescription: issue.description || '',
         userId: user.id,
         userName: user.name,
-        teamId: '', // Would need additional API call to get team ID
+        teamId: (issue.team as any)?.id || '',
         commentId: commentData.id,
         mentionText: commentData.body,
         createdAt: new Date().toISOString()
       };
+
+      // Enhance context with AgentSession event data if available
+      if (event?.type === 'AgentSessionEvent' && event.agentSession) {
+        const session = event.agentSession;
+
+        // Add richer context from AgentSession event
+        baseContext.issueDescription = session.issue?.description || baseContext.issueDescription;
+        baseContext.teamId = session.issue?.team?.id || baseContext.teamId;
+
+        // Add AgentSession-specific metadata
+        (baseContext as any).sessionId = session.id;
+        (baseContext as any).sessionStatus = session.status;
+        (baseContext as any).previousComments = event.previousComments || [];
+        (baseContext as any).priority = session.issue?.priority;
+        (baseContext as any).labels = session.issue?.labels?.nodes || [];
+      }
+
+      return baseContext;
     } catch (error) {
       console.error('❌ Error extracting session context:', error);
       return null;
